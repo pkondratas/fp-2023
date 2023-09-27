@@ -10,6 +10,7 @@ where
 
 import DataFrame (DataFrame (..), Row, Column (..), ColumnType (..), Value (..))
 import InMemoryTables (TableName)
+import Data.Char (toLower)
 
 type ErrorMessage = String
 
@@ -25,7 +26,14 @@ findTableByName _ _ = error "findTableByName not implemented"
 -- 2) implement the function which parses a "select * from ..."
 -- sql statement and extracts a table name from the statement
 parseSelectAllStatement :: String -> Either ErrorMessage TableName
-parseSelectAllStatement _ = error "parseSelectAllStatement not implemented"
+parseSelectAllStatement statement = if null statement then Left "Input is empty"
+else
+  case words (map toLower statement) of
+    ["select", "*", "from", tableName] -> Right (removeSemicolon tableName)
+    _ -> Left "Invalid SQL statement"
+
+removeSemicolon :: String -> String
+removeSemicolon s = if not (null s) && last s == ';' then init s else s
 
 -- 3) implement the function which validates tables: checks if
 -- columns match value types, if rows sizes match columns,..
