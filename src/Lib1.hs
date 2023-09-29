@@ -77,4 +77,53 @@ validateDataFrame (DataFrame columns rows) = validateRows rows
 -- answer for this task!), it should respect terminal
 -- width (in chars, provided as the first argument)
 renderDataFrameAsTable :: Integer -> DataFrame -> String
-renderDataFrameAsTable _ _ = error "renderDataFrameAsTable not implemented"
+renderDataFrameAsTable n (DataFrame columns rows) = main ++ "\n" ++ add ++"\n" ++ aRows
+    where
+        cWidths = calculateCWidths n columns
+        aRows = makeRows rows cWidths
+        main = makeMain columns cWidths
+        add = makeAdd n columns
+
+        calculateCWidths :: Integer -> [Column] -> [Int]
+        calculateCWidths maxWidth columnArray = 
+            let columnNum = length columnArray
+                cellWidth = (maxWidth - 2) `div` fromIntegral columnNum
+            in replicate columnNum (fromIntegral cellWidth)
+
+        makeAdd :: Integer -> [Column] -> String
+        makeAdd maxWidth columnArray = 
+            let columnNum = length columnArray
+                cellWidth = (maxWidth - 2) `div` fromIntegral columnNum
+            in replicate (columnNum * fromIntegral cellWidth + 3) '-'
+
+        makeCell :: Value -> Int -> String
+        makeCell value width = 
+            let cellContent = case value of
+                    StringValue s -> s 
+                    IntegerValue i -> show i
+                    BoolValue b -> if b then "True" else "False"
+                    NullValue-> ""
+                strLen = length cellContent
+                emptySpace = width - strLen - 3
+                emptySpace2 = if emptySpace `mod` 2 == 0
+                      then emptySpace `div` 2
+                      else emptySpace `div` 2 + 1
+                in replicate (emptySpace `div` 2) ' ' ++ cellContent ++ replicate (emptySpace2) ' ' ++ "<#>"
+
+        makeMain :: [Column] -> [Int] -> String
+        makeMain allColumns cWidthArray =
+            let mainCells = zipWith makeMCell allColumns cWidthArray
+            in "<#>" ++ concat mainCells
+
+        makeMCell :: Column -> Int -> String
+        makeMCell (Column name _) w = makeCell (StringValue name) w
+
+        makeRows :: [Row] -> [Int] -> String
+        makeRows rowArray cWidth = 
+            let readyRows = map (makeSingleRow cWidth) rowArray
+            in unlines readyRows
+
+        makeSingleRow :: [Int] -> Row -> String
+        makeSingleRow widths row = 
+            let cells = zipWith makeCell row widths
+            in "<#>" ++ concat cells
