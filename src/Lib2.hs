@@ -12,8 +12,8 @@ module Lib2
 where
 
 import Data.List ( elemIndex )
-import DataFrame (DataFrame)
-import InMemoryTables (TableName)
+import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType), Value (StringValue))
+import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 
@@ -22,8 +22,8 @@ type Database = [(TableName, DataFrame.DataFrame)]
 
 -- Keep the type, modify constructors
 data ParsedStatement
-  = ShowTable {command :: String, table_name :: String}
-  | ShowTables {command :: String }
+  = ShowTable String
+  | ShowTables
   deriving (Show, Eq)
 
 -- Parses user input into an entity representing a parsed
@@ -38,7 +38,7 @@ parseStatement query =
 
   where
     identifyCommand :: [String] -> Either ErrorMessage ParsedStatement
-    identifyCommand [] = Left "Empty query"
+    identifyCommand [] = Left "Empty query."
     identifyCommand (w:ws) =
       case validCommand w ws of
         Left err -> Left err
@@ -46,28 +46,41 @@ parseStatement query =
 
     -- function that reads the the keywords
     validCommand :: String -> [String] -> Either ErrorMessage ParsedStatement
-    validCommand _ [] = Left "Too few arguments"
+    validCommand _ [] = Left "Too few arguments."
     validCommand command (w:ws) =
       if map toLower command == "show"
-        then case w of
+        then case map toLower w of
           "table" ->
             case identifyTableName ws of
               Left err -> Left err
               Right result -> Right result
           "tables" ->
             if null ws
-              then Right (ShowTables "tables")
+              then Right ShowTables
             else
-              Left "Wrong query syntax"
+              Left "Wrong query syntax."
+          _ -> Left "Unsuported command/wrong syntax."
       else
         Left "Wrong query syntax"
 
+    -- SHOW TABLE table_name identification 
     identifyTableName :: [String] -> Either ErrorMessage ParsedStatement
     identifyTableName [] = Left "Specify table name"
     identifyTableName (_:_:_) = Left "Table name should contain one word"
-    identifyTableName (w:ws) = Right (ShowTable "table" w)
+    identifyTableName (w:ws) = Right (ShowTable w)
+
 
 -- Executes a parsed statemet. Produces a DataFrame. Uses
 -- InMemoryTables.databases a source of data.
 executeStatement :: ParsedStatement -> Either ErrorMessage DataFrame
-executeStatement _ = Left "Not implemented: executeStatement"
+-- executeStatement _ = Left "Not implemented: executeStatement"
+executeStatement (ShowTable table_name) = 
+  case lookup table_name database of
+    Just result -> Right $ DataFrame [Column "Columns" StringType] (map (\(Column name _) -> [StringValue name]) (columns result))
+    Nothing -> Left ("Table " ++ table_name ++ " doesn't exist")
+  where
+    columns :: DataFrame -> [Column]
+    columns (DataFrame cols _) = cols
+
+executeStatement ShowTables =
+  Right $ DataFrame [Column "Tables" StringType] (map (\(name, _) -> [StringValue name]) database)
