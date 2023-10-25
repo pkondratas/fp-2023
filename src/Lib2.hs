@@ -24,6 +24,7 @@ type Database = [(TableName, DataFrame.DataFrame)]
 data ParsedStatement
   = ShowTable String
   | ShowTables
+  | SelectStatement [String] String [String]
   deriving (Show, Eq)
 
 -- Parses user input into an entity representing a parsed
@@ -47,34 +48,63 @@ parseStatement query =
     -- function that reads the the keywords
     validCommand :: String -> [String] -> Either ErrorMessage ParsedStatement
     validCommand _ [] = Left "Too few arguments."
-    validCommand command (w:ws) =
-      if map toLower command == "show"
-        then case map toLower w of
+    validCommand command q
+      | map toLower command == "show" = case map toLower (head q) of
           "table" ->
-            case identifyTableName ws of
+            case identifyShowTableName (tail q) of
               Left err -> Left err
               Right result -> Right result
           "tables" ->
-            if null ws
+            if null (tail q)
               then Right ShowTables
             else
               Left "Wrong query syntax."
           _ -> Left "Unsuported command/wrong syntax."
-      else
-        Left "Wrong query syntax"
+      | map toLower command == "select" = case splitSelectStatement q of
+        Left err -> Left err
+        Right result -> Right result
+      | otherwise = Left "Wrong query syntax"
+
+    splitSelectStatement :: [String] -> Either ErrorMessage ParsedStatement
+    splitSelectStatement q = do
+        (a, b) <- splitColumns [] q
+        (name, conditions) <- identifySelectTableName b
+        parseSelectStatement a name conditions
+
+    -- splits columns until finds from (if where or select - error)
+    splitColumns :: [String] -> [String] -> Either ErrorMessage ([String], [String])
+    splitColumns cols [] = Left "Wrong query syntax"
+    splitColumns cols w
+      | map toLower (head w) == "where" || map toLower (head w) == "select" = Left "Wrong SELECT/WHERE placement/count."
+      | map toLower (head w) == "from" = Right (cols, tail w)
+      | otherwise = splitColumns (head w : cols) (tail w)
+
+    -- identifies the name (can't be select where from or any other)
+    -- if after from contains more than one word (which are not name and WHERE clause) throws error
+    identifySelectTableName :: [String] -> Either ErrorMessage (String, [String])
+    identifySelectTableName [] = Left "No table name after FROM."
+    identifySelectTableName (w:ws)
+      | map toLower w == "where" || map toLower w == "from" || map toLower w == "select" = Left "Table name can not be a SQL statement."
+      | null ws = Right (w, ws)
+      | map toLower (head ws) == "where" = Right (w, ws)
+      | otherwise = Left "Table name should contain only one word, followed with optional conditions(WHERE)"
+
+    -- makes a parsed select depending if there is where clause or not
+    parseSelectStatement :: [String] -> String -> [String] -> Either ErrorMessage ParsedStatement
+    parseSelectStatement cols name [_] = Left "Conditions needed after WHERE."
+    parseSelectStatement cols name conditions = Right (SelectStatement cols name conditions)
 
     -- SHOW TABLE table_name identification 
-    identifyTableName :: [String] -> Either ErrorMessage ParsedStatement
-    identifyTableName [] = Left "Specify table name"
-    identifyTableName (_:_:_) = Left "Table name should contain one word"
-    identifyTableName (w:ws) = Right (ShowTable w)
-
+    identifyShowTableName :: [String] -> Either ErrorMessage ParsedStatement
+    identifyShowTableName [] = Left "Specify table name."
+    identifyShowTableName (_:_:_) = Left "Table name should contain one word."
+    identifyShowTableName (w:ws) = Right (ShowTable w)
 
 -- Executes a parsed statemet. Produces a DataFrame. Uses
 -- InMemoryTables.databases a source of data.
 executeStatement :: ParsedStatement -> Either ErrorMessage DataFrame
 -- executeStatement _ = Left "Not implemented: executeStatement"
-executeStatement (ShowTable table_name) = 
+executeStatement (ShowTable table_name) =
   case lookup table_name database of
     Just result -> Right $ DataFrame [Column "Columns" StringType] (map (\(Column name _) -> [StringValue name]) (columns result))
     Nothing -> Left ("Table " ++ table_name ++ " doesn't exist")
