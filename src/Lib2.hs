@@ -115,23 +115,36 @@ executeStatement (ShowTable table_name) =
 executeStatement ShowTables =
   Right $ DataFrame [Column "Tables" StringType] (map (\(name, _) -> [StringValue name]) database)
 
--- Sita atfiltruoja lentele
--- applyConditions :: String -> String -> Either ErrorMessage DataFrame
+-- Filters a DataFrame table by statement conditions
+applyConditions :: String -> String -> Either ErrorMessage DataFrame
+applyConditions conditions tableName = do
+    let maybeDataFrame = lookup tableName database
+    case maybeDataFrame of
+        Just (DataFrame columns rows) -> do
+            let filteredRows = filterRows conditions tableName rows
+            if null filteredRows then
+              Left "Incorrect condition syntax"
+            else return (DataFrame columns filteredRows)
+        Nothing -> Left "Table not found in the database"
 
--- TODO for applyConditions:
--- Get conditions and table from parameters
--- Function to get all table rows
--- Iterate through the rows (x:xs) style
--- For each row check if conditions are true with checkAndCondition function
--- If yes, add the row to the result
--- Return result in the form of DataFrame
+-- Filters rows based on the given conditions
+filterRows :: String -> String -> [Row] -> [Row]
+filterRows conditions table rows =
+    [row | row <- rows, checkCondition conditions table row == Right True]
 
 checkCondition :: String -> String -> Row -> Either ErrorMessage Bool
-checkCondition condition table row = executeCondition (words condition)
+checkCondition condition table row = executeCondition (getFirstThreeWords condition)
   where
+
+    getFirstThreeWords :: String -> (String, String, String)
+    getFirstThreeWords input =
+      case words input of
+        (operand1 : operator : operand2 : _) -> (operand1, operator, operand2)
+        _ -> error "Not enough words in the input string"
+
     -- Returns the operation value based on the operator provided in the condition string
-    executeCondition :: [String] -> Either ErrorMessage Bool
-    executeCondition (operand1 :  operator :  operand2 : _) =
+    executeCondition :: (String, String, String) -> Either ErrorMessage Bool
+    executeCondition (operand1,  operator,  operand2 ) =
       case operator of
         "=" -> Right (getOperandValue operand1 == getOperandValue operand2)
         "<>" -> Right (getOperandValue operand1 /= getOperandValue operand2)
