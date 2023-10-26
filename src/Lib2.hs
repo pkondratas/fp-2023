@@ -12,7 +12,7 @@ module Lib2
 where
 
 import Data.List ( elemIndex )
-import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType), Value (StringValue))
+import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType), Value (StringValue, IntegerValue, NullValue), Row)
 import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
@@ -24,6 +24,7 @@ type Database = [(TableName, DataFrame.DataFrame)]
 data ParsedStatement
   = ShowTable String
   | ShowTables
+  | Select {table :: String, conditions :: String}
   deriving (Show, Eq)
 
 -- Parses user input into an entity representing a parsed
@@ -84,3 +85,69 @@ executeStatement (ShowTable table_name) =
 
 executeStatement ShowTables =
   Right $ DataFrame [Column "Tables" StringType] (map (\(name, _) -> [StringValue name]) database)
+
+-- Sita atfiltruoja lentele
+-- applyConditions :: String -> String -> Either ErrorMessage DataFrame
+
+-- TODO for applyConditions:
+-- Get conditions and table from parameters
+-- Function to get all table rows
+-- Iterate through the rows (x:xs) style
+-- For each row check if conditions are true with checkAndCondition function
+-- If yes, add the row to the result
+-- Return result in the form of DataFrame
+
+checkCondition :: String -> String -> Row -> Either ErrorMessage Bool
+checkCondition condition table row = executeCondition (words condition)
+  where
+    -- Returns the operation value based on the operator provided in the condition string
+    executeCondition :: [String] -> Either ErrorMessage Bool
+    executeCondition (operand1 :  operator :  operand2 : _) =
+      case operator of
+        "=" -> Right (getOperandValue operand1 == getOperandValue operand2)
+        "<>" -> Right (getOperandValue operand1 /= getOperandValue operand2)
+        "!=" -> Right (getOperandValue operand1 /= getOperandValue operand2)
+        "<" -> Right (getOperandValue operand1 < getOperandValue operand2)
+        ">" -> Right (getOperandValue operand1 > getOperandValue operand2)
+        "<=" -> Right (getOperandValue operand1 <= getOperandValue operand2)
+        ">=" -> Right (getOperandValue operand1 >= getOperandValue operand2)
+        _ -> Left "Incorrect operator"
+
+    -- Returns an operand value based on the operand string (either a regular integer or a column value)
+    getOperandValue :: String -> Integer
+    getOperandValue opName =
+      if isInteger opName then
+        case reads opName of
+          [(intValue, _)] -> intValue
+      else
+        case getValueFromTable opName row of
+          IntegerValue intValue -> intValue
+          _ -> error "Column does not exist in this row"
+
+    -- Check if operand is an integer      
+    isInteger :: String -> Bool
+    isInteger str = case reads str :: [(Integer, String)] of
+      [(_, "")] -> True
+      _ -> False
+    
+    -- Get the value from the DataFrame row by column name
+    getValueFromTable :: String -> Row -> Value
+    getValueFromTable columnName currentRow =
+      let
+        -- Find the DataFrame by the tableName in the database
+        maybeDataFrame = lookup table database
+
+        -- Find the column index by columnName
+        maybeColumnIndex = maybeDataFrame >>= \(DataFrame columns _) ->
+          elemIndex columnName (map (\(Column name _) -> name) columns)
+
+        -- Get value from the row
+        value = maybe NullValue (\index -> fromMaybe NullValue (currentRow `atMay` index)) maybeColumnIndex
+      in
+        value
+
+    -- Get an element at a specific index in a list
+    atMay :: [a] -> Int -> Maybe a
+    atMay [] _ = Nothing
+    atMay (x:_) 0 = Just x
+    atMay (_:xs) n = atMay xs (n - 1)
