@@ -133,12 +133,11 @@ applyConditions conditions tableName = do
 -- Filters rows based on the given conditions
 filterRows :: String -> String -> [Row] -> [Row]
 filterRows conditions table rows =
-    [row | row <- rows, checkCondition conditions table row == Right True]
+    [row | row <- rows, checkAll conditions table row == Right True]
 
 checkCondition :: String -> String -> Row -> Either ErrorMessage Bool
 checkCondition condition table row = executeCondition (getFirstThreeWords condition)
   where
-
     getFirstThreeWords :: String -> (String, String, String)
     getFirstThreeWords input =
       case words input of
@@ -204,11 +203,6 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
 --   where 
 --     executeSelect :: [Column] -> [Row] -> ParsedStatement -> Either ErrorMessage DataFrame
 --     executeSelect c r (SelectStatement cols table conditions) =
-      
-
-
-
-
 
 checkAll :: String -> String -> Row -> Either ErrorMessage Bool
 checkAll conditions tableName row
