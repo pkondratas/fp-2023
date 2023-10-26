@@ -11,13 +11,12 @@ module Lib2
   )
 where
 
-import Data.List ( elemIndex )
+import Data.List ( elemIndex, isPrefixOf )
 import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType), Value (StringValue, IntegerValue, NullValue), Row)
 import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.List (isPrefixOf)
-import GHC.Windows (getErrorMessage)
 
 type ErrorMessage = String
 type Database = [(TableName, DataFrame.DataFrame)]
@@ -106,8 +105,8 @@ parseStatement query =
 
 -- Executes a parsed statemet. Produces a DataFrame. Uses
 -- InMemoryTables.databases a source of data.
+-- execute SHOW TABLE table_name;
 executeStatement :: ParsedStatement -> Either ErrorMessage DataFrame
--- executeStatement _ = Left "Not implemented: executeStatement"
 executeStatement (ShowTable table_name) =
   case lookup table_name database of
     Just result -> Right $ DataFrame [Column "Columns" StringType] (map (\(Column name _) -> [StringValue name]) (columns result))
@@ -116,9 +115,12 @@ executeStatement (ShowTable table_name) =
     columns :: DataFrame -> [Column]
     columns (DataFrame cols _) = cols
 
+-- execute SHOW TABLES;
 executeStatement ShowTables =
   Right $ DataFrame [Column "Tables" StringType] (map (\(name, _) -> [StringValue name]) database)
 
+
+--execute SELECT cols FROM table WHERE ... AND ... AND ...;
 executeStatement (SelectStatement cols table conditions) =
   case applyConditions conditions table of
     Left err -> Left err
@@ -128,31 +130,38 @@ executeStatement (SelectStatement cols table conditions) =
           Left err -> Left err
           Right result -> Right result
       else
-        Left "(Some of the) Column(s) don't exist."
+        Left "(Some of the) Column(s) not found."
   where
+    -- validates whether columns exist
     validateColumns :: [String] -> [String] -> Bool
     validateColumns columns [] = True
     validateColumns columns (n:ns) =
       elem n columns && validateColumns columns ns
 
+    -- filters the received DataFrame with applied conditions 
     executeSelect :: [Column] -> [Row] -> [String] -> Either ErrorMessage DataFrame
     executeSelect columns rows selectedColumnNames =
       let
-        -- Helper function to extract columns by name
+        filterRows :: [Column] -> [Row] -> [String] -> [Row]
+        filterRows _ [] _ = []
+        filterRows cols (row:restRows) selectedColumnNames =
+          let
+            extractValues :: [Column] -> Row -> Row
+            extractValues selectedCols values = [val | (col, val) <- zip cols values, col `elem` selectedCols]
+
+            filteredRow = extractValues selectedColumns row
+
+            filteredRestRows = filterRows cols restRows selectedColumnNames
+          in
+            filteredRow : filteredRestRows
+          
         extractColumns :: [String] -> [Column] -> [Column]
         extractColumns names cols = filter (\(Column name _) -> name `elem` names) cols
 
-        -- Filter columns based on selectedColumnNames
+        filteredRows = filterRows columns rows selectedColumnNames
         selectedColumns = extractColumns selectedColumnNames columns
-
-        -- Helper function to extract values for selected columns
-        extractValues :: [Column] -> Row -> Row
-        extractValues cols row = [val | (col, val) <- zip cols row]
-
-        -- Apply the filtering to the rows
-        selectedRows = map (extractValues selectedColumns) rows
       in
-        Right (DataFrame selectedColumns selectedRows)
+        Right (DataFrame selectedColumns filteredRows)
 
 
 -- Filters a DataFrame table by statement conditions
@@ -161,8 +170,10 @@ applyConditions conditions tableName = do
     let maybeDataFrame = lookup tableName database
     case maybeDataFrame of
         Just (DataFrame columns rows) -> do
-            let filteredRows = filterRows conditions tableName rows
-            return (DataFrame columns filteredRows)
+          if null conditions
+            then return (DataFrame columns rows)
+          else 
+            return (DataFrame columns (filterRows conditions tableName rows))
         Nothing -> Left "Table not found in the database"
 
 -- Filters rows based on the given conditions
@@ -176,8 +187,8 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
     getFirstThreeWords :: String -> (String, String, String)
     getFirstThreeWords input =
       case words input of
-        (operand1 : operator : operand2 : _) -> (operand1, operator, operand2)
-        _ -> error "Not enough words in the input string"
+        [operand1, operator, operand2] -> (operand1, operator, operand2)
+        _ -> error "Incorrect condition syntax"
 
     -- Returns the operation value based on the operator provided in the condition string
     executeCondition :: (String, String, String) -> Either ErrorMessage Bool
@@ -190,7 +201,7 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
         ">" -> Right (getOperandValue operand1 > getOperandValue operand2)
         "<=" -> Right (getOperandValue operand1 <= getOperandValue operand2)
         ">=" -> Right (getOperandValue operand1 >= getOperandValue operand2)
-        _ -> Left "Incorrect operator"
+        _ -> error "Incorrect condition syntax"
 
     -- Returns an operand value based on the operand string (either a regular integer or a column value)
     getOperandValue :: String -> Integer
@@ -236,22 +247,21 @@ checkAll conditions tableName row
     | null conditions = Left "Conditions string is empty"
     | otherwise = checkAllConditions (splitByAnd conditions) tableName row
 
-  where
-    checkAllConditions :: [String] -> String -> Row -> Either ErrorMessage Bool
-    checkAllConditions [] _ _ = Right True -- Base case: all conditions have been checked and are true
-    checkAllConditions (condition:rest) tableName row =
-        case checkCondition condition tableName row of
-            Left errMsg -> Left errMsg -- If any condition fails, return the error message
-            Right True -> checkAllConditions rest tableName row -- If condition is true, check the rest of the conditions
-            Right False -> Right False -- If condition is false, return false immediately
+checkAllConditions :: [String] -> String -> Row -> Either ErrorMessage Bool
+checkAllConditions [] _ _ = Right True -- Base case: all conditions have been checked and are true
+checkAllConditions (condition:rest) tableName row =
+    case checkCondition condition tableName row of
+        Left errMsg -> Left errMsg -- If any condition fails, return the error message
+        Right True -> checkAllConditions rest tableName row -- If condition is true, check the rest of the conditions
+        Right False -> Right False -- If condition is false, return false immediately
 
-    splitByAnd :: String -> [String]
-    splitByAnd input = splitByWord "AND" input
-        where
-            splitByWord :: String -> String -> [String]
-            splitByWord _ [] = [""]
-            splitByWord word input@(x:xs)
-                | word `isPrefixOf` input = "" : splitByWord word (drop (length word) input)
-                | otherwise = (x : head rest) : tail rest
-                where
-                    rest = splitByWord word xs
+splitByAnd :: String -> [String]
+splitByAnd input = splitByWord "AND" input
+    where
+        splitByWord :: String -> String -> [String]
+        splitByWord _ [] = [""]
+        splitByWord word input@(x:xs)
+            | word `isPrefixOf` input = "" : splitByWord word (drop (length word) input)
+            | otherwise = (x : head rest) : tail rest
+            where
+                rest = splitByWord word xs
