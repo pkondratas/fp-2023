@@ -11,12 +11,11 @@ module Lib2
   )
 where
 
-import Data.List ( elemIndex )
+import Data.List ( elemIndex, isPrefixOf )
 import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType), Value (StringValue, IntegerValue, NullValue), Row)
 import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
-import Data.List (isPrefixOf)
 
 type ErrorMessage = String
 type Database = [(TableName, DataFrame.DataFrame)]
@@ -125,25 +124,22 @@ applyConditions conditions tableName = do
     case maybeDataFrame of
         Just (DataFrame columns rows) -> do
             let filteredRows = filterRows conditions tableName rows
-            if null filteredRows then
-              Left "Incorrect condition syntax"
-            else return (DataFrame columns filteredRows)
+            return (DataFrame columns filteredRows)
         Nothing -> Left "Table not found in the database"
 
 -- Filters rows based on the given conditions
 filterRows :: String -> String -> [Row] -> [Row]
 filterRows conditions table rows =
-    [row | row <- rows, checkCondition conditions table row == Right True]
+    [row | row <- rows, checkAll conditions table row == Right True]
 
 checkCondition :: String -> String -> Row -> Either ErrorMessage Bool
 checkCondition condition table row = executeCondition (getFirstThreeWords condition)
   where
-
     getFirstThreeWords :: String -> (String, String, String)
     getFirstThreeWords input =
       case words input of
-        (operand1 : operator : operand2 : _) -> (operand1, operator, operand2)
-        _ -> error "Not enough words in the input string"
+        [operand1, operator, operand2] -> (operand1, operator, operand2)
+        _ -> error "Incorrect condition syntax"
 
     -- Returns the operation value based on the operator provided in the condition string
     executeCondition :: (String, String, String) -> Either ErrorMessage Bool
@@ -156,7 +152,7 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
         ">" -> Right (getOperandValue operand1 > getOperandValue operand2)
         "<=" -> Right (getOperandValue operand1 <= getOperandValue operand2)
         ">=" -> Right (getOperandValue operand1 >= getOperandValue operand2)
-        _ -> Left "Incorrect operator"
+        _ -> error "Incorrect condition syntax"
 
     -- Returns an operand value based on the operand string (either a regular integer or a column value)
     getOperandValue :: String -> Integer
@@ -204,18 +200,12 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
 --   where 
 --     executeSelect :: [Column] -> [Row] -> ParsedStatement -> Either ErrorMessage DataFrame
 --     executeSelect c r (SelectStatement cols table conditions) =
-      
-
-
-
-
 
 checkAll :: String -> String -> Row -> Either ErrorMessage Bool
 checkAll conditions tableName row
     | null conditions = Left "Error: Conditions string is empty"
     | otherwise = checkAllConditions (splitByAnd conditions) tableName row
 
-  where
 checkAllConditions :: [String] -> String -> Row -> Either ErrorMessage Bool
 checkAllConditions [] _ _ = Right True -- Base case: all conditions have been checked and are true
 checkAllConditions (condition:rest) tableName row =
@@ -229,7 +219,7 @@ splitByAnd input = splitByWord "AND" input
     where
         splitByWord :: String -> String -> [String]
         splitByWord _ [] = [""]
-        splitByWord word input@(x:xs)
+        splitByWord word inputList@(x:xs)
             | word `isPrefixOf` input = "" : splitByWord word (drop (length word) input)
             | otherwise = (x : head rest) : tail rest
             where
