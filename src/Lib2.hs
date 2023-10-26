@@ -17,6 +17,7 @@ import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.List (isPrefixOf)
+import GHC.Windows (getErrorMessage)
 
 type ErrorMessage = String
 type Database = [(TableName, DataFrame.DataFrame)]
@@ -118,6 +119,42 @@ executeStatement (ShowTable table_name) =
 executeStatement ShowTables =
   Right $ DataFrame [Column "Tables" StringType] (map (\(name, _) -> [StringValue name]) database)
 
+executeStatement (SelectStatement cols table conditions) =
+  case applyConditions conditions table of
+    Left err -> Left err
+    Right (DataFrame c r) ->
+      if validateColumns (map (\(Column name _) -> name) c) cols
+        then case executeSelect c r cols of
+          Left err -> Left err
+          Right result -> Right result
+      else
+        Left "(Some of the) Column(s) don't exist."
+  where
+    validateColumns :: [String] -> [String] -> Bool
+    validateColumns columns [] = True
+    validateColumns columns (n:ns) =
+      elem n columns && validateColumns columns ns
+
+    executeSelect :: [Column] -> [Row] -> [String] -> Either ErrorMessage DataFrame
+    executeSelect columns rows selectedColumnNames =
+      let
+        -- Helper function to extract columns by name
+        extractColumns :: [String] -> [Column] -> [Column]
+        extractColumns names cols = filter (\(Column name _) -> name `elem` names) cols
+
+        -- Filter columns based on selectedColumnNames
+        selectedColumns = extractColumns selectedColumnNames columns
+
+        -- Helper function to extract values for selected columns
+        extractValues :: [Column] -> Row -> Row
+        extractValues cols row = [val | (col, val) <- zip cols row]
+
+        -- Apply the filtering to the rows
+        selectedRows = map (extractValues selectedColumns) rows
+      in
+        Right (DataFrame selectedColumns selectedRows)
+
+
 -- Filters a DataFrame table by statement conditions
 applyConditions :: String -> String -> Either ErrorMessage DataFrame
 applyConditions conditions tableName = do
@@ -125,9 +162,7 @@ applyConditions conditions tableName = do
     case maybeDataFrame of
         Just (DataFrame columns rows) -> do
             let filteredRows = filterRows conditions tableName rows
-            if null filteredRows then
-              Left "Incorrect condition syntax"
-            else return (DataFrame columns filteredRows)
+            return (DataFrame columns filteredRows)
         Nothing -> Left "Table not found in the database"
 
 -- Filters rows based on the given conditions
@@ -173,7 +208,7 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
     isInteger str = case reads str :: [(Integer, String)] of
       [(_, "")] -> True
       _ -> False
-    
+
     -- Get the value from the DataFrame row by column name
     getValueFromTable :: String -> Row -> Value
     getValueFromTable columnName currentRow =
@@ -196,35 +231,27 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
     atMay (x:_) 0 = Just x
     atMay (_:xs) n = atMay xs (n - 1)
 
--- executeStatement select = 
---   case applyConditions table conditions of
---     Left err -> Left err
---     Right [c] [r] -> Right executeSelect c r select
---   where 
---     executeSelect :: [Column] -> [Row] -> ParsedStatement -> Either ErrorMessage DataFrame
---     executeSelect c r (SelectStatement cols table conditions) =
-
 checkAll :: String -> String -> Row -> Either ErrorMessage Bool
 checkAll conditions tableName row
-    | null conditions = Left "Error: Conditions string is empty"
+    | null conditions = Left "Conditions string is empty"
     | otherwise = checkAllConditions (splitByAnd conditions) tableName row
 
   where
-checkAllConditions :: [String] -> String -> Row -> Either ErrorMessage Bool
-checkAllConditions [] _ _ = Right True -- Base case: all conditions have been checked and are true
-checkAllConditions (condition:rest) tableName row =
-    case checkCondition condition tableName row of
-        Left errMsg -> Left errMsg -- If any condition fails, return the error message
-        Right True -> checkAllConditions rest tableName row -- If condition is true, check the rest of the conditions
-        Right False -> Right False -- If condition is false, return false immediately
+    checkAllConditions :: [String] -> String -> Row -> Either ErrorMessage Bool
+    checkAllConditions [] _ _ = Right True -- Base case: all conditions have been checked and are true
+    checkAllConditions (condition:rest) tableName row =
+        case checkCondition condition tableName row of
+            Left errMsg -> Left errMsg -- If any condition fails, return the error message
+            Right True -> checkAllConditions rest tableName row -- If condition is true, check the rest of the conditions
+            Right False -> Right False -- If condition is false, return false immediately
 
-splitByAnd :: String -> [String]
-splitByAnd input = splitByWord "AND" input
-    where
-        splitByWord :: String -> String -> [String]
-        splitByWord _ [] = [""]
-        splitByWord word input@(x:xs)
-            | word `isPrefixOf` input = "" : splitByWord word (drop (length word) input)
-            | otherwise = (x : head rest) : tail rest
-            where
-                rest = splitByWord word xs
+    splitByAnd :: String -> [String]
+    splitByAnd input = splitByWord "AND" input
+        where
+            splitByWord :: String -> String -> [String]
+            splitByWord _ [] = [""]
+            splitByWord word input@(x:xs)
+                | word `isPrefixOf` input = "" : splitByWord word (drop (length word) input)
+                | otherwise = (x : head rest) : tail rest
+                where
+                    rest = splitByWord word xs
