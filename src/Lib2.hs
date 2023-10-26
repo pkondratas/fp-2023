@@ -7,7 +7,7 @@
 module Lib2
   ( parseStatement,
     executeStatement,
-    ParsedStatement
+    ParsedStatement(..)
   )
 where
 
@@ -16,6 +16,7 @@ import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType
 import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
+import Data.List (isPrefixOf)
 
 type ErrorMessage = String
 type Database = [(TableName, DataFrame.DataFrame)]
@@ -24,7 +25,7 @@ type Database = [(TableName, DataFrame.DataFrame)]
 data ParsedStatement
   = ShowTable String
   | ShowTables
-  | SelectStatement [String] String [String]
+  | SelectStatement [String] String String
   deriving (Show, Eq)
 
 -- Parses user input into an entity representing a parsed
@@ -76,8 +77,9 @@ parseStatement query =
     splitColumns cols [] = Left "Wrong query syntax"
     splitColumns cols w
       | map toLower (head w) == "where" || map toLower (head w) == "select" = Left "Wrong SELECT/WHERE placement/count."
+      | map toLower (head w) == "from" && null cols = Left "No columns specified"
       | map toLower (head w) == "from" = Right (cols, tail w)
-      | otherwise = splitColumns (head w : cols) (tail w)
+      | otherwise = splitColumns (cols ++ [head w]) (tail w)
 
     -- identifies the name (can't be select where from or any other)
     -- if after from contains more than one word (which are not name and WHERE clause) throws error
@@ -92,7 +94,8 @@ parseStatement query =
     -- makes a parsed select depending if there is where clause or not
     parseSelectStatement :: [String] -> String -> [String] -> Either ErrorMessage ParsedStatement
     parseSelectStatement cols name [_] = Left "Conditions needed after WHERE."
-    parseSelectStatement cols name conditions = Right (SelectStatement cols name conditions)
+    parseSelectStatement cols name [] = Right (SelectStatement cols name "")
+    parseSelectStatement cols name conditions = Right (SelectStatement cols name (unwords (tail conditions)))
 
     -- SHOW TABLE table_name identification 
     identifyShowTableName :: [String] -> Either ErrorMessage ParsedStatement
@@ -193,3 +196,41 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
     atMay [] _ = Nothing
     atMay (x:_) 0 = Just x
     atMay (_:xs) n = atMay xs (n - 1)
+
+-- executeStatement select = 
+--   case applyConditions table conditions of
+--     Left err -> Left err
+--     Right [c] [r] -> Right executeSelect c r select
+--   where 
+--     executeSelect :: [Column] -> [Row] -> ParsedStatement -> Either ErrorMessage DataFrame
+--     executeSelect c r (SelectStatement cols table conditions) =
+      
+
+
+
+
+
+checkAll :: String -> String -> Row -> Either ErrorMessage Bool
+checkAll conditions tableName row
+    | null conditions = Left "Error: Conditions string is empty"
+    | otherwise = checkAllConditions (splitByAnd conditions) tableName row
+
+  where
+checkAllConditions :: [String] -> String -> Row -> Either ErrorMessage Bool
+checkAllConditions [] _ _ = Right True -- Base case: all conditions have been checked and are true
+checkAllConditions (condition:rest) tableName row =
+    case checkCondition condition tableName row of
+        Left errMsg -> Left errMsg -- If any condition fails, return the error message
+        Right True -> checkAllConditions rest tableName row -- If condition is true, check the rest of the conditions
+        Right False -> Right False -- If condition is false, return false immediately
+
+splitByAnd :: String -> [String]
+splitByAnd input = splitByWord "AND" input
+    where
+        splitByWord :: String -> String -> [String]
+        splitByWord _ [] = [""]
+        splitByWord word input@(x:xs)
+            | word `isPrefixOf` input = "" : splitByWord word (drop (length word) input)
+            | otherwise = (x : head rest) : tail rest
+            where
+                rest = splitByWord word xs
