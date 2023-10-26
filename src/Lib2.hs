@@ -7,7 +7,7 @@
 module Lib2
   ( parseStatement,
     executeStatement,
-    ParsedStatement
+    ParsedStatement(..)
   )
 where
 
@@ -25,7 +25,7 @@ type Database = [(TableName, DataFrame.DataFrame)]
 data ParsedStatement
   = ShowTable String
   | ShowTables
-  | SelectStatement [String] String [String]
+  | SelectStatement [String] String String
   deriving (Show, Eq)
 
 -- Parses user input into an entity representing a parsed
@@ -77,8 +77,9 @@ parseStatement query =
     splitColumns cols [] = Left "Wrong query syntax"
     splitColumns cols w
       | map toLower (head w) == "where" || map toLower (head w) == "select" = Left "Wrong SELECT/WHERE placement/count."
+      | map toLower (head w) == "from" && null cols = Left "No columns specified"
       | map toLower (head w) == "from" = Right (cols, tail w)
-      | otherwise = splitColumns (head w : cols) (tail w)
+      | otherwise = splitColumns (cols ++ [head w]) (tail w)
 
     -- identifies the name (can't be select where from or any other)
     -- if after from contains more than one word (which are not name and WHERE clause) throws error
@@ -93,7 +94,8 @@ parseStatement query =
     -- makes a parsed select depending if there is where clause or not
     parseSelectStatement :: [String] -> String -> [String] -> Either ErrorMessage ParsedStatement
     parseSelectStatement cols name [_] = Left "Conditions needed after WHERE."
-    parseSelectStatement cols name conditions = Right (SelectStatement cols name conditions)
+    parseSelectStatement cols name [] = Right (SelectStatement cols name "")
+    parseSelectStatement cols name conditions = Right (SelectStatement cols name (unwords (tail conditions)))
 
     -- SHOW TABLE table_name identification 
     identifyShowTableName :: [String] -> Either ErrorMessage ParsedStatement
@@ -116,7 +118,16 @@ executeStatement (ShowTable table_name) =
 executeStatement ShowTables =
   Right $ DataFrame [Column "Tables" StringType] (map (\(name, _) -> [StringValue name]) database)
 
+-- Sita atfiltruoja lentele
+-- applyConditions :: String -> String -> Either ErrorMessage DataFrame
 
+-- TODO for applyConditions:
+-- Get conditions and table from parameters
+-- Function to get all table rows
+-- Iterate through the rows (x:xs) style
+-- For each row check if conditions are true with checkAndCondition function
+-- If yes, add the row to the result
+-- Return result in the form of DataFrame
 
 checkCondition :: String -> String -> Row -> Either ErrorMessage Bool
 checkCondition condition table row = executeCondition (words condition)
@@ -133,7 +144,7 @@ checkCondition condition table row = executeCondition (words condition)
         "<=" -> Right (getOperandValue operand1 <= getOperandValue operand2)
         ">=" -> Right (getOperandValue operand1 >= getOperandValue operand2)
         _ -> Left "Incorrect operator"
- 
+
     -- Returns an operand value based on the operand string (either a regular integer or a column value)
     getOperandValue :: String -> Integer
     getOperandValue opName =
@@ -144,34 +155,46 @@ checkCondition condition table row = executeCondition (words condition)
         case getValueFromTable opName row of
           IntegerValue intValue -> intValue
           _ -> error "Column does not exist in this row"
- 
+
     -- Check if operand is an integer      
     isInteger :: String -> Bool
     isInteger str = case reads str :: [(Integer, String)] of
       [(_, "")] -> True
       _ -> False
-   
+    
     -- Get the value from the DataFrame row by column name
     getValueFromTable :: String -> Row -> Value
     getValueFromTable columnName currentRow =
       let
         -- Find the DataFrame by the tableName in the database
         maybeDataFrame = lookup table database
- 
+
         -- Find the column index by columnName
         maybeColumnIndex = maybeDataFrame >>= \(DataFrame columns _) ->
           elemIndex columnName (map (\(Column name _) -> name) columns)
- 
+
         -- Get value from the row
         value = maybe NullValue (\index -> fromMaybe NullValue (currentRow `atMay` index)) maybeColumnIndex
       in
         value
- 
+
     -- Get an element at a specific index in a list
     atMay :: [a] -> Int -> Maybe a
     atMay [] _ = Nothing
     atMay (x:_) 0 = Just x
     atMay (_:xs) n = atMay xs (n - 1)
+
+-- executeStatement select = 
+--   case applyConditions table conditions of
+--     Left err -> Left err
+--     Right [c] [r] -> Right executeSelect c r select
+--   where 
+--     executeSelect :: [Column] -> [Row] -> ParsedStatement -> Either ErrorMessage DataFrame
+--     executeSelect c r (SelectStatement cols table conditions) =
+      
+
+
+
 
 
 checkAll :: String -> String -> Row -> Either ErrorMessage Bool

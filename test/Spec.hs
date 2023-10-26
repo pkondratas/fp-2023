@@ -2,7 +2,15 @@ import Data.Either
 import Data.Maybe ()
 import InMemoryTables qualified as D
 import Lib1
+import Lib2
 import Test.Hspec
+
+-- data ParsedStatement
+--   = ShowTable String
+--   | ShowTables
+--   | SelectStatement [String] String String
+--   deriving (Show, Eq)
+
 
 main :: IO ()
 main = hspec $ do
@@ -34,3 +42,37 @@ main = hspec $ do
   describe "Lib1.renderDataFrameAsTable" $ do
     it "renders a table" $ do
       Lib1.renderDataFrameAsTable 100 (snd D.tableEmployees) `shouldSatisfy` not . null
+  describe "Lib2.parseStatement" $ do
+    it "parse SHOW TABLES;" $ do
+      Lib2.parseStatement "SHOW TABLES;" `shouldBe` Right ShowTables
+    it "parse Show      tabLeS;" $ do
+      Lib2.parseStatement "Show      tabLeS;" `shouldBe` Right ShowTables
+    it "parse SHOW TABLE aaa;" $ do
+      Lib2.parseStatement "SHOW TABLE aaa;" `shouldBe` Right (ShowTable "aaa")
+    it "parse sHoW TaBLe aaa;" $ do
+      Lib2.parseStatement "sHoW TaBLe aaa;" `shouldBe` Right (ShowTable "aaa")
+    it "parse SELECT col1 col2 FROM table1;" $ do
+      Lib2.parseStatement "SELECT col1 col2 FROM table1;" `shouldBe` Right (SelectStatement ["col1", "col2"] "table1" "")
+    it "parse SELECT col1 col2 FROM table1 WHERE a > b;" $ do
+      Lib2.parseStatement "SELECT col1 col2 FROM table1 WHERE a > b;" `shouldBe` Right (SelectStatement ["col1", "col2"] "table1" "a > b")
+    it "parse SELECT col1 col2 FROM table1 WHERE a > b AND a > c AND b > c;" $ do
+      Lib2.parseStatement "SELECT col1 col2 FROM table1 WHERE a > b AND a > c AND b > c;" `shouldBe` Right (SelectStatement ["col1", "col2"] "table1" "a > b AND a > c AND b > c")
+    it "parse Show tabLeS asdsadsad;" $ do
+      Lib2.parseStatement "Show tabLeS asdsadsad;" `shouldSatisfy` isLeft
+    it "parse Show tabLe;" $ do
+      Lib2.parseStatement "Show tabLe;" `shouldSatisfy` isLeft
+    it "parse Show tabLe asdsad asdsad;" $ do
+      Lib2.parseStatement "Show tabLe asdsad asdsad;" `shouldSatisfy` isLeft
+    it "parse SELECT col1 col2 FROM table1 WHERE;" $ do
+      Lib2.parseStatement "SELECT col1 col2 FROM table1 WHERE;" `shouldSatisfy` isLeft
+    it "parse SELECT col1 col2 FROM table1 aaaaa;" $ do
+      Lib2.parseStatement "SELECT col1 col2 FROM table1 aaaaa;" `shouldSatisfy` isLeft
+    it "parse SELECT col1 col2 FROM table1 aaaaa;" $ do
+      Lib2.parseStatement "SELECT col1 col2 FROM table1 aaaaa;" `shouldSatisfy` isLeft
+    it "parse SELECT col1 col2 FROM;" $ do
+      Lib2.parseStatement "SELECT col1 col2 FROM;" `shouldSatisfy` isLeft
+    it "parse SELECT col1 col2 FROM;" $ do
+      Lib2.parseStatement "SELECT col1 col2;" `shouldSatisfy` isLeft
+    it "parse SELECT FROM;" $ do
+      Lib2.parseStatement "SELECT col1 col2;" `shouldSatisfy` isLeft
+  
