@@ -75,4 +75,12 @@ main = hspec $ do
       Lib2.parseStatement "SELECT col1 col2;" `shouldSatisfy` isLeft
     it "parse SELECT FROM;" $ do
       Lib2.parseStatement "SELECT col1 col2;" `shouldSatisfy` isLeft
+    describe "Lib2.executeStatement" $ do
+    it "returns a DataFrame for an existing table" $ do
+      Lib2.executeStatement (ShowTable "employees") `shouldBe` Right (DataFrame [Column "Columns" StringType] [[StringValue "id"], [StringValue "name"], [StringValue "surname"]])
+    it "returns an error message for a non-existing table" $ do
+        Lib2.executeStatement (ShowTable "non_existing_table") `shouldSatisfy`  isLeft
+    it "returns a DataFrame for ShowTables" $ do
+        Lib2.executeStatement ShowTables `shouldBe` Right (DataFrame [Column "Tables" StringType] [[StringValue "employees"], [StringValue "invalid1"], [StringValue "invalid2"], [StringValue "long_strings"], [StringValue "flags"]])
+      
   
