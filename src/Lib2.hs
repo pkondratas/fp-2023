@@ -355,7 +355,7 @@ splitByAnd input = splitByWord "AND" input
     where
         splitByWord :: String -> String -> [String]
         splitByWord _ [] = [""]
-        splitByWord word inputList@(x:xs)
+        splitByWord word input@(x:xs)
             | word `isPrefixOf` input = "" : splitByWord word (drop (length word) input)
             | otherwise = (x : head rest) : tail rest
             where
