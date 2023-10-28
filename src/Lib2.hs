@@ -12,11 +12,12 @@ module Lib2
 where
 
 import Data.List ( elemIndex, isPrefixOf )
-import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType), Value (StringValue, IntegerValue, NullValue), Row)
+import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType, IntegerType), Value (StringValue, IntegerValue, NullValue), Row)
 import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.List (isPrefixOf)
+import GHC.Windows (getErrorMessage)
 
 type ErrorMessage = String
 type Database = [(TableName, DataFrame.DataFrame)]
@@ -125,7 +126,7 @@ executeStatement (SelectStatement cols table conditions) =
   case applyConditions conditions table of
     Left err -> Left err
     Right (DataFrame c r) ->
-      if validateColumns (map (\(Column name _) -> name) c) cols
+      if validateColumns (map (\(Column name _) -> name) c) c cols
         then case executeSelect c r cols of
           Left err -> Left err
           Right result -> Right result
@@ -133,15 +134,60 @@ executeStatement (SelectStatement cols table conditions) =
         Left "(Some of the) Column(s) not found."
   where
     -- validates whether columns exist
-    validateColumns :: [String] -> [String] -> Bool
-    validateColumns columns [] = True
-    validateColumns columns (n:ns) =
-      elem n columns && validateColumns columns ns
+    validateColumns :: [String] -> [Column] -> [String] -> Bool
+    validateColumns columns c [] = True
+    validateColumns columns c (n:ns) =
+      (elem n columns || checkIfSumOrMin n c) && validateColumns columns c ns
+
+    checkIfSumOrMin :: String -> [Column] -> Bool
+    checkIfSumOrMin str columns
+        | ("sum(" `isPrefixOf` (map toLower str) || "min(" `isPrefixOf`map toLower str) && last str == ')' =
+            checkAgainColumn (drop 4 (init str)) columns
+        | otherwise = False
+
+        -- Define a sample function to check the column
+    checkAgainColumn :: String -> [Column] -> Bool
+    checkAgainColumn columnName columns =
+        case any (\(Column name _) -> name == columnName) columns of
+            True -> checkIfInteger (filter (\(Column name _) -> name == columnName) columns)
+            False -> False
+
+    checkIfInteger :: [Column] -> Bool
+    checkIfInteger [(Column _ colType)] =
+        colType == IntegerType
 
     -- filters the received DataFrame with applied conditions 
     executeSelect :: [Column] -> [Row] -> [String] -> Either ErrorMessage DataFrame
+    -- visus columus is db, rows, column names
     executeSelect columns rows selectedColumnNames =
       let
+        -- Find the index of a column by name in a list of columns
+        findColumnIndex :: String -> [Column] -> Maybe Int
+        findColumnIndex columnName columns = elemIndex columnName (map (\(Column colName _) -> colName) columns)
+
+        -- Extract values from a specified column in a list of rows
+        getValuesInColumn :: Int -> [Row] -> [Integer]
+        getValuesInColumn columnIndex rows = [value | (IntegerValue value) <- map (!! columnIndex) rows]
+
+        -- Calculate the minimum value in a specified column of a DataFrame
+        minim :: DataFrame -> String -> Either ErrorMessage Integer
+        minim (DataFrame columns rows) columnName =
+            case findColumnIndex columnName columns of
+                Just columnIndex ->
+                    case getValuesInColumn columnIndex rows of
+                        [] -> Left "No values in the specified column."
+                        values -> Right (foldr1 min values)
+                Nothing -> Left "Column not found in the DataFrame."
+
+        -- Calculate the sum of values in a specified column of a DataFrame
+        sum_n :: DataFrame -> String -> Either ErrorMessage Integer
+        sum_n (DataFrame columns rows) columnName =
+            case findColumnIndex columnName columns of
+                Just columnIndex ->
+                    case getValuesInColumn columnIndex rows of
+                        values -> Right (sum values)
+                Nothing -> Left "Column not found in the DataFrame."
+
         filterRows :: [Column] -> [Row] -> [String] -> [Row]
         filterRows _ [] _ = []
         filterRows cols (row:restRows) selectedColumnNames =
@@ -154,14 +200,63 @@ executeStatement (SelectStatement cols table conditions) =
             filteredRestRows = filterRows cols restRows selectedColumnNames
           in
             filteredRow : filteredRestRows
-          
+
+        splitByBracket :: String -> (String, String)
+        splitByBracket s =
+          let
+            tuple = splitAt 3 (init s)
+          in
+            (fst tuple, tail (snd tuple))
+
+        extractFunctions :: [String] -> ([String], [(String, String)]) -> ([String], [(String, String)])
+        extractFunctions [] cols = cols
+        extractFunctions (c:cs) (cols, functions) =
+          case take 4 (map toLower c) of
+            "min(" -> extractFunctions cs (cols, functions ++ [splitByBracket c])
+            "sum(" -> extractFunctions cs (cols, functions ++ [splitByBracket c])
+            _ ->  extractFunctions cs (cols ++ [c], functions)
+
+        -- -- cia baigta
+        combineRowsAndFunctions :: [Row] -> [(String, String)] -> [Column] -> [Row] -> [Row]
+        combineRowsAndFunctions rez [] _ _ = rez 
+        combineRowsAndFunctions r (t:ts) columns rows = combineRowsAndFunctions (map (addValueToRow t columns rows) r) ts columns rows
+          where
+            addValueToRow :: (String, String) -> [Column] -> [Row] -> Row -> Row
+            addValueToRow t columns rows row = 
+              if map toLower (fst t) == "min"
+                then 
+                  case minim (DataFrame columns rows) (snd t) of
+                    Left err -> row
+                    Right rez -> row ++ [IntegerValue rez]
+              else
+                case sum_n (DataFrame columns rows) (snd t) of
+                  Left err -> row
+                  Right rez -> row ++ [IntegerValue rez]
+
+
         extractColumns :: [String] -> [Column] -> [Column]
         extractColumns names cols = filter (\(Column name _) -> name `elem` names) cols
 
-        filteredRows = filterRows columns rows selectedColumnNames
+        combineColsAndFunctions :: [Column] -> [(String, String)] -> [Column]
+        combineColsAndFunctions rez [] = rez
+        combineColsAndFunctions rez (t:ts) = combineColsAndFunctions (addValueToCols rez t) ts
+          where
+            addValueToCols :: [Column] -> (String, String) -> [Column]
+            addValueToCols c tup = 
+              if map toLower (fst tup) == "min"
+                then 
+                  c ++ [Column ("MIN(" ++ (snd tup) ++ ")") IntegerType]
+              else
+                  c ++ [Column ("SUM(" ++ (snd tup) ++ ")") IntegerType]
+
+        -- reikia atskirt kur yra column name ir kur yra min ir sum
+        fun = extractFunctions selectedColumnNames ([], [])
+        filteredRows = filterRows columns rows (fst fun)
+        allRows = combineRowsAndFunctions filteredRows (snd fun) columns rows 
         selectedColumns = extractColumns selectedColumnNames columns
+        allCols = combineColsAndFunctions selectedColumns (snd fun) 
       in
-        Right (DataFrame selectedColumns filteredRows)
+        Right (DataFrame allCols allRows)
 
 
 -- Filters a DataFrame table by statement conditions
@@ -172,7 +267,7 @@ applyConditions conditions tableName = do
         Just (DataFrame columns rows) -> do
           if null conditions
             then return (DataFrame columns rows)
-          else 
+          else
             return (DataFrame columns (filterRows conditions tableName rows))
         Nothing -> Left "Table not found in the database"
 
