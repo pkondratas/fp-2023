@@ -249,14 +249,15 @@ executeStatement (SelectStatement cols table conditions) =
               else
                   c ++ [Column ("SUM(" ++ (snd tup) ++ ")") IntegerType]
 
-        -- reikia atskirt kur yra column name ir kur yra min ir sum
         fun = extractFunctions selectedColumnNames ([], [])
         filteredRows = filterRows columns rows (fst fun)
-        allRows = combineRowsAndFunctions filteredRows (snd fun) columns rows 
+        allRows = combineRowsAndFunctions filteredRows (snd fun) columns rows
         selectedColumns = extractColumns selectedColumnNames columns
-        allCols = combineColsAndFunctions selectedColumns (snd fun) 
+        allCols = combineColsAndFunctions selectedColumns (snd fun)
       in
-        Right (DataFrame allCols allRows)
+        if null (snd fun)
+          then Right (DataFrame allCols allRows)
+          else Right (DataFrame allCols [head allRows])
 
 
 -- Filters a DataFrame table by statement conditions
