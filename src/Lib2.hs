@@ -17,7 +17,7 @@ import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.List (isPrefixOf)
-import GHC.Windows (getErrorMessage)
+
 
 type ErrorMessage = String
 type Database = [(TableName, DataFrame.DataFrame)]
