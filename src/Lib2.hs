@@ -17,7 +17,7 @@ import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.List (isPrefixOf)
-
+import GHC.Windows (getErrorMessage)
 
 type ErrorMessage = String
 type Database = [(TableName, DataFrame.DataFrame)]
@@ -130,9 +130,15 @@ executeStatement (SelectStatement cols table conditions) =
         then case executeSelect c r cols of
           Left err -> Left err
           Right result -> Right result
+      else if checkIfAll cols
+        then Right (DataFrame c r)
       else
         Left "(Some of the) Column(s) not found."
   where
+    checkIfAll :: [String] -> Bool
+    checkIfAll [n] =
+      n == "*"
+
     -- validates whether columns exist
     validateColumns :: [String] -> [Column] -> [String] -> Bool
     validateColumns columns c [] = True
@@ -218,13 +224,13 @@ executeStatement (SelectStatement cols table conditions) =
 
         -- -- cia baigta
         combineRowsAndFunctions :: [Row] -> [(String, String)] -> [Column] -> [Row] -> [Row]
-        combineRowsAndFunctions rez [] _ _ = rez 
+        combineRowsAndFunctions rez [] _ _ = rez
         combineRowsAndFunctions r (t:ts) columns rows = combineRowsAndFunctions (map (addValueToRow t columns rows) r) ts columns rows
           where
             addValueToRow :: (String, String) -> [Column] -> [Row] -> Row -> Row
-            addValueToRow t columns rows row = 
+            addValueToRow t columns rows row =
               if map toLower (fst t) == "min"
-                then 
+                then
                   case minim (DataFrame columns rows) (snd t) of
                     Left err -> row
                     Right rez -> row ++ [IntegerValue rez]
@@ -242,22 +248,21 @@ executeStatement (SelectStatement cols table conditions) =
         combineColsAndFunctions rez (t:ts) = combineColsAndFunctions (addValueToCols rez t) ts
           where
             addValueToCols :: [Column] -> (String, String) -> [Column]
-            addValueToCols c tup = 
+            addValueToCols c tup =
               if map toLower (fst tup) == "min"
-                then 
+                then
                   c ++ [Column ("MIN(" ++ (snd tup) ++ ")") IntegerType]
               else
                   c ++ [Column ("SUM(" ++ (snd tup) ++ ")") IntegerType]
 
+        -- reikia atskirt kur yra column name ir kur yra min ir sum
         fun = extractFunctions selectedColumnNames ([], [])
         filteredRows = filterRows columns rows (fst fun)
         allRows = combineRowsAndFunctions filteredRows (snd fun) columns rows
         selectedColumns = extractColumns selectedColumnNames columns
         allCols = combineColsAndFunctions selectedColumns (snd fun)
       in
-        if null (snd fun)
-          then Right (DataFrame allCols allRows)
-          else Right (DataFrame allCols [head allRows])
+        Right (DataFrame allCols allRows)
 
 
 -- Filters a DataFrame table by statement conditions
