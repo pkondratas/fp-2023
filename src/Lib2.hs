@@ -17,7 +17,6 @@ import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.List (isPrefixOf)
-import GHC.Windows (getErrorMessage)
 
 type ErrorMessage = String
 type Database = [(TableName, DataFrame.DataFrame)]
@@ -262,7 +261,9 @@ executeStatement (SelectStatement cols table conditions) =
         selectedColumns = extractColumns selectedColumnNames columns
         allCols = combineColsAndFunctions selectedColumns (snd fun)
       in
-        Right (DataFrame allCols allRows)
+        if null (snd fun)
+          then Right (DataFrame allCols allRows)
+          else Right (DataFrame allCols [head allRows])
 
 
 -- Filters a DataFrame table by statement conditions
@@ -357,12 +358,12 @@ checkAllConditions (condition:rest) tableName row =
         Right False -> Right False -- If condition is false, return false immediately
 
 splitByAnd :: String -> [String]
-splitByAnd input = splitByWord "AND" input
+splitByAnd input = splitByWord "and" input
+
+splitByWord :: String -> String -> [String]
+splitByWord _ [] = [""]
+splitByWord word input@(x:xs)
+    | word `isPrefixOf` map toLower input = "" : splitByWord word (drop (length word) input)
+    | otherwise = (x : head rest) : tail rest
     where
-        splitByWord :: String -> String -> [String]
-        splitByWord _ [] = [""]
-        splitByWord word input@(x:xs)
-            | word `isPrefixOf` input = "" : splitByWord word (drop (length word) input)
-            | otherwise = (x : head rest) : tail rest
-            where
-                rest = splitByWord word xs
+        rest = splitByWord word xs
