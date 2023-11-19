@@ -79,7 +79,11 @@ parseStatement query =
       | map toLower (head w) == "where" || map toLower (head w) == "select" = Left "Wrong SELECT/WHERE placement/count."
       | map toLower (head w) == "from" && null cols = Left "No columns specified"
       | map toLower (head w) == "from" = Right (cols, tail w)
-      | otherwise = splitColumns (cols ++ [head w]) (tail w)
+      | otherwise = splitColumns (cols ++ splitByComma (head w)) (tail w)
+      where
+        -- Helper function to split a string by commas
+        splitByComma :: String -> [String]
+        splitByComma str = filter (not . null) $ words $ map (\c -> if c == ',' then ' ' else c) str
 
     -- identifies the name (can't be select where from or any other)
     -- if after from contains more than one word (which are not name and WHERE clause) throws error
