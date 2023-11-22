@@ -16,7 +16,7 @@ import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType
 import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
-import Data.List (isPrefixOf)
+import Data.List
 
 type ErrorMessage = String
 type Database = [(TableName, DataFrame.DataFrame)]
@@ -126,7 +126,7 @@ executeStatement ShowTables =
 
 --execute SELECT cols FROM table WHERE ... AND ... AND ...;
 executeStatement (SelectStatement cols table conditions) =
-  case applyConditions conditions table of
+  case applyConditions conditions [table] of
     Left err -> Left err
     Right (DataFrame c r) ->
       if validateColumns (map (\(Column name _) -> name) c) c cols
@@ -269,25 +269,97 @@ executeStatement (SelectStatement cols table conditions) =
           then Right (DataFrame allCols allRows)
           else Right (DataFrame allCols [head allRows])
 
+--VEIKIMO PRINCIPAS:
+--Paduoda conditionus ir tableName'us
+--Jeigu table tik vienas, tada gauni DataFrame pagal tableName ir iskart paduodi funkcijai
+--Jeigu table daugiau, juos sujungi, tada sujungtus paduodi i funkcija atfiltruoti
+
+--TODO:
+-- Kai yra vienas table, DataFrame nera prefikso prie column'o (pvz.: nera, kad butu table1.col1, o yra tiesiog col1)
 
 -- Filters a DataFrame table by statement conditions
-applyConditions :: String -> String -> Either ErrorMessage DataFrame
-applyConditions conditions tableName = do
+applyConditions :: String -> [String] -> Either ErrorMessage DataFrame
+--Jeigu yra tik vienas tableName
+applyConditions conditions [tableName] = do
     let maybeDataFrame = lookup tableName database
+    let table = maybeToDataFrame maybeDataFrame
     case maybeDataFrame of
-        Just (DataFrame columns rows) -> do
+        Just (DataFrame columns rows) ->
           if null conditions
             then return (DataFrame columns rows)
-          else
-            return (DataFrame columns (filterRows conditions tableName rows))
+            else return (DataFrame columns (filterRows conditions table rows))
         Nothing -> Left "Table not found in the database"
+    where
+      maybeToDataFrame :: Maybe DataFrame -> DataFrame
+      maybeToDataFrame maybeDf =
+        case maybeDf of
+          Just df -> df
+          Nothing -> DataFrame [] []
+
+applyConditions conditions tableNames = do
+  let joinedTable = joinTables tableNames
+  case joinedTable of
+        (DataFrame columns rows) ->
+          if null conditions
+            then return (DataFrame columns rows)
+            else return (DataFrame columns (filterRows conditions joinedTable rows))
+
+----------------------
+--For joining tables--
+----------------------
+joinTables :: [String] -> DataFrame
+joinTables tableNames =
+  foldl (\acc (tableName, df) -> joinTwoTables (head tableNames) acc tableName df) baseTable restTables
+  where
+    baseTable = snd (head database)
+    restTables = map (\tableName -> findTableByName tableName) (tail tableNames)
+
+joinTwoTables :: TableName -> DataFrame -> TableName -> DataFrame -> DataFrame
+joinTwoTables tableName1 df1 tableName2 df2 =
+  let commonColumns = findCommonColumns (renameColumns tableName1 (getColumns df1)) (renameColumns tableName2 (getColumns df2))
+      df1Renamed = DataFrame (renameColumns tableName1 (getColumns df1)) (getRows df1)
+      df2Renamed = DataFrame (renameColumns tableName2 (getColumns df2)) (getRows df2)
+      combinedDF = rowMultiplication df1Renamed df2Renamed
+  in removeDuplicateColumns commonColumns combinedDF
+
+findCommonColumns :: [Column] -> [Column] -> [String]
+findCommonColumns cols1 cols2 =
+  [colName1 | Column colName1 _ <- cols1, any (\(Column colName2 _) -> colName1 == colName2) cols2]
+
+renameColumns :: TableName -> [Column] -> [Column]
+renameColumns tableName cols =
+  [Column (tableName ++ "." ++ colName) colType | Column colName colType <- cols]
+
+rowMultiplication :: DataFrame -> DataFrame -> DataFrame
+rowMultiplication (DataFrame cols1 rows1) (DataFrame cols2 rows2) =
+  DataFrame (cols1 ++ cols2) [row1 ++ row2 | row1 <- rows1, row2 <- rows2]
+
+removeDuplicateColumns :: [String] -> DataFrame -> DataFrame
+removeDuplicateColumns commonColumns (DataFrame cols rows) =
+  DataFrame (nubBy (\(Column col1 _) (Column col2 _) -> col1 == col2) cols) rows
+
+getColumns :: DataFrame -> [Column]
+getColumns dataFrame = case dataFrame of
+  (DataFrame columns rows) -> columns
+
+getRows :: DataFrame -> [Row]
+getRows dataFrame = case dataFrame of
+  (DataFrame columns rows) -> rows
+
+-- Helper function to find a table by name in the database
+findTableByName :: String -> (TableName, DataFrame)
+findTableByName tableName =
+  case lookup tableName database of
+    Just df -> (tableName, df)
+    Nothing -> error ("Table not found: " ++ tableName)
+----------------------
 
 -- Filters rows based on the given conditions
-filterRows :: String -> String -> [Row] -> [Row]
+filterRows :: String -> DataFrame -> [Row] -> [Row]
 filterRows conditions table rows =
     [row | row <- rows, checkAll conditions table row == Right True]
 
-checkCondition :: String -> String -> Row -> Either ErrorMessage Bool
+checkCondition :: String -> DataFrame -> Row -> Either ErrorMessage Bool
 checkCondition condition table row = executeCondition (getFirstThreeWords condition)
   where
     getFirstThreeWords :: String -> (String, String, String)
@@ -330,11 +402,13 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
     getValueFromTable :: String -> Row -> Value
     getValueFromTable columnName currentRow =
       let
-        -- Find the DataFrame by the tableName in the database
-        maybeDataFrame = lookup table database
+        toMaybeDataFrame :: DataFrame -> Maybe DataFrame
+        toMaybeDataFrame df = case df of
+          (DataFrame [] []) -> Nothing
+          _ -> Just df
 
         -- Find the column index by columnName
-        maybeColumnIndex = maybeDataFrame >>= \(DataFrame columns _) ->
+        maybeColumnIndex = toMaybeDataFrame table >>= \(DataFrame columns _) ->
           elemIndex columnName (map (\(Column name _) -> name) columns)
 
         -- Get value from the row
@@ -348,17 +422,17 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
     atMay (x:_) 0 = Just x
     atMay (_:xs) n = atMay xs (n - 1)
 
-checkAll :: String -> String -> Row -> Either ErrorMessage Bool
-checkAll conditions tableName row
+checkAll :: String -> DataFrame -> Row -> Either ErrorMessage Bool
+checkAll conditions tableFrame row
     | null conditions = Left "Conditions string is empty"
-    | otherwise = checkAllConditions (splitByAnd conditions) tableName row
+    | otherwise = checkAllConditions (splitByAnd conditions) tableFrame row
 
-checkAllConditions :: [String] -> String -> Row -> Either ErrorMessage Bool
+checkAllConditions :: [String] -> DataFrame -> Row -> Either ErrorMessage Bool
 checkAllConditions [] _ _ = Right True -- Base case: all conditions have been checked and are true
-checkAllConditions (condition:rest) tableName row =
-    case checkCondition condition tableName row of
+checkAllConditions (condition:rest) tableFrame row =
+    case checkCondition condition tableFrame row of
         Left errMsg -> Left errMsg -- If any condition fails, return the error message
-        Right True -> checkAllConditions rest tableName row -- If condition is true, check the rest of the conditions
+        Right True -> checkAllConditions rest tableFrame row -- If condition is true, check the rest of the conditions
         Right False -> Right False -- If condition is false, return false immediately
 
 splitByAnd :: String -> [String]
