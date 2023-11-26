@@ -69,22 +69,9 @@ parseStatement query =
 
     splitSelectStatement :: [String] -> Either ErrorMessage ParsedStatement
     splitSelectStatement q = do
-        (a, b) <- splitColumns [] q
+        (a, b) <- distinguishColumnNames q
         (names, conditions) <- distinguishTableNames b
         parseSelectStatement a names conditions
-
-    -- splits columns until finds from (if where or select - error)
-    splitColumns :: [String] -> [String] -> Either ErrorMessage ([String], [String])
-    splitColumns cols [] = Left "Wrong query syntax"
-    splitColumns cols w
-      | map toLower (head w) == "where" || map toLower (head w) == "select" = Left "Wrong SELECT/WHERE placement/count."
-      | map toLower (head w) == "from" && null cols = Left "No columns specified"
-      | map toLower (head w) == "from" = Right (cols, tail w)
-      | otherwise = splitColumns (cols ++ splitByComma (head w)) (tail w)
-      where
-        -- Helper function to split a string by commas
-        splitByComma :: String -> [String]
-        splitByComma str = filter (not . null) $ words $ map (\c -> if c == ',' then ' ' else c) str
 
     -- makes a parsed select depending if there is where clause or not
     parseSelectStatement :: [String] -> [String] -> [String] -> Either ErrorMessage ParsedStatement
@@ -98,19 +85,40 @@ parseStatement query =
     identifyShowTableName (_:_:_) = Left "Table name should contain one word."
     identifyShowTableName (w:ws) = Right (ShowTable w)
 
+distinguishColumnNames :: [String] -> Either ErrorMessage ([String], [String])
+distinguishColumnNames rest = 
+    case findFrom [] rest of
+      Left err -> Left err
+      Right (cols, tablesAndConditions) -> case words (changeCommasIntoSpaces (concat cols)) == words (changeCommasIntoSpaces (unwords cols)) of
+                False -> Left "Wrong syntax: incorrect commas between columns."
+                True -> case concat cols of
+                    [] -> Left "Wrong syntaxxx"
+                    (c:cs) -> if c == ',' then Left "No columns specified before first comma" else 
+                        case validateCommaSyntax cs of
+                            Left err -> Left err
+                            Right () -> case validateTableNames (splitItemsByComma (concat cols)) of
+                                Left err -> Left err
+                                Right () -> Right (splitItemsByComma (concat cols), tablesAndConditions)
+
+
+findFrom :: [String] -> [String] -> Either ErrorMessage ([String], [String])
+findFrom cols [] = Left "Wrong syntax: missing 'FROM' statement"
+findFrom cols words =
+    if map toLower (head words) == "from" then Right (cols, (tail words)) else findFrom (cols ++ [head words]) (tail words)
+
 distinguishTableNames :: [String] -> Either ErrorMessage ([String], [String])
 distinguishTableNames rest = 
     let (tables, conditions) = findWhere [] rest
     in case words (changeCommasIntoSpaces (concat tables)) == words (changeCommasIntoSpaces (unwords tables)) of
-        False -> Left "Wrong syntax"
+        False -> Left ((changeCommasIntoSpaces (concat tables)) ++ " != " ++ (changeCommasIntoSpaces (unwords tables)))
         True -> case concat tables of
-            [] -> Left "Wrong syntax"
+            [] -> Left "Wrong syntax: no tables found"
             (c:cs) -> if c == ',' then Left "No columns specified before first comma" else 
                 case validateCommaSyntax cs of
                     Left err -> Left err
-                    Right () -> case validateTableNames (splitByTablesByComma (concat tables)) of
+                    Right () -> case validateTableNames (splitItemsByComma (concat tables)) of
                         Left err -> Left err
-                        Right () -> Right (splitByTablesByComma (concat tables), conditions)
+                        Right () -> Right (splitItemsByComma (concat tables), conditions)
 
 validateTableNames :: [String] -> Either ErrorMessage ()
 validateTableNames [] = Right ()
@@ -118,22 +126,21 @@ validateTableNames (n:ns)
   | map toLower n == "where" || map toLower n == "select" || map toLower n == "from" = Left "Wrong syntax(keywords cannot be table names)"
   | otherwise = validateTableNames ns
 
-splitByTablesByComma :: String -> [String]
-splitByTablesByComma str = words $ map (\c -> if c == ',' then ' ' else c) str
+splitItemsByComma :: String -> [String]
+splitItemsByComma str = words $ map (\c -> if c == ',' then ' ' else c) str
 
 validateCommaSyntax :: String -> Either ErrorMessage ()
 validateCommaSyntax [] = Right ()
 validateCommaSyntax (c:cs)
     | c == ',' = if null cs 
         then 
-            Left "Wrong syntax"
+            Left "Wrong syntax: comma can't be last symbol after table name"
         else
             case head cs == ',' of
                 False -> validateCommaSyntax (tail cs)
                 True -> Left "Wrong syntax(no column name between commas)"
     | otherwise = validateCommaSyntax cs
 
-    -- case changeCommasIntoSpaces (findWhere [] words) of
 findWhere :: [String] -> [String] -> ([String], [String])
 findWhere tables [] = (tables, [])
 findWhere tables words =
@@ -161,7 +168,7 @@ executeStatement ShowTables =
 
 --execute SELECT cols FROM table WHERE ... AND ... AND ...;
 executeStatement (SelectStatement cols table conditions) =
-  case applyConditions conditions [table] of
+  case applyConditions conditions table of
     Left err -> Left err
     Right (DataFrame c r) ->
       if validateColumns (map (\(Column name _) -> name) c) c cols
@@ -176,6 +183,7 @@ executeStatement (SelectStatement cols table conditions) =
     checkIfAll :: [String] -> Bool
     checkIfAll [n] =
       n == "*"
+    checkIfAll _ = False
 
     -- validates whether columns exist
     validateColumns :: [String] -> [Column] -> [String] -> Bool
