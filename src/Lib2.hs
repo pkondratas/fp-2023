@@ -3,6 +3,7 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use isJust" #-}
 {-# OPTIONS_GHC -Wno-unused-matches #-}
+{-# HLINT ignore "Use if" #-}
 
 module Lib2
   ( parseStatement,
@@ -25,7 +26,7 @@ type Database = [(TableName, DataFrame.DataFrame)]
 data ParsedStatement
   = ShowTable String
   | ShowTables
-  | SelectStatement [String] String String
+  | SelectStatement [String] [String] String
   deriving (Show, Eq)
 
 -- Parses user input into an entity representing a parsed
@@ -69,8 +70,8 @@ parseStatement query =
     splitSelectStatement :: [String] -> Either ErrorMessage ParsedStatement
     splitSelectStatement q = do
         (a, b) <- splitColumns [] q
-        (name, conditions) <- identifySelectTableName b
-        parseSelectStatement a name conditions
+        (names, conditions) <- distinguishTableNames b
+        parseSelectStatement a names conditions
 
     -- splits columns until finds from (if where or select - error)
     splitColumns :: [String] -> [String] -> Either ErrorMessage ([String], [String])
@@ -85,27 +86,61 @@ parseStatement query =
         splitByComma :: String -> [String]
         splitByComma str = filter (not . null) $ words $ map (\c -> if c == ',' then ' ' else c) str
 
-    -- identifies the name (can't be select where from or any other)
-    -- if after from contains more than one word (which are not name and WHERE clause) throws error
-    identifySelectTableName :: [String] -> Either ErrorMessage (String, [String])
-    identifySelectTableName [] = Left "No table name after FROM."
-    identifySelectTableName (w:ws)
-      | map toLower w == "where" || map toLower w == "from" || map toLower w == "select" = Left "Table name can not be a SQL statement."
-      | null ws = Right (w, ws)
-      | map toLower (head ws) == "where" = Right (w, ws)
-      | otherwise = Left "Table name should contain only one word, followed with optional conditions(WHERE)"
-
     -- makes a parsed select depending if there is where clause or not
-    parseSelectStatement :: [String] -> String -> [String] -> Either ErrorMessage ParsedStatement
-    parseSelectStatement cols name [_] = Left "Conditions needed after WHERE."
-    parseSelectStatement cols name [] = Right (SelectStatement cols name "")
-    parseSelectStatement cols name conditions = Right (SelectStatement cols name (unwords (tail conditions)))
+    parseSelectStatement :: [String] -> [String] -> [String] -> Either ErrorMessage ParsedStatement
+    parseSelectStatement cols names [_] = Left "Conditions needed after WHERE."
+    parseSelectStatement cols names [] = Right (SelectStatement cols names "")
+    parseSelectStatement cols names conditions = Right (SelectStatement cols names (unwords (tail conditions)))
 
     -- SHOW TABLE table_name identification 
     identifyShowTableName :: [String] -> Either ErrorMessage ParsedStatement
     identifyShowTableName [] = Left "Specify table name."
     identifyShowTableName (_:_:_) = Left "Table name should contain one word."
     identifyShowTableName (w:ws) = Right (ShowTable w)
+
+distinguishTableNames :: [String] -> Either ErrorMessage ([String], [String])
+distinguishTableNames rest = 
+    let (tables, conditions) = findWhere [] rest
+    in case words (changeCommasIntoSpaces (concat tables)) == words (changeCommasIntoSpaces (unwords tables)) of
+        False -> Left "Wrong syntax"
+        True -> case concat tables of
+            [] -> Left "Wrong syntax"
+            (c:cs) -> if c == ',' then Left "No columns specified before first comma" else 
+                case validateCommaSyntax cs of
+                    Left err -> Left err
+                    Right () -> case validateTableNames (splitByTablesByComma (concat tables)) of
+                        Left err -> Left err
+                        Right () -> Right (splitByTablesByComma (concat tables), conditions)
+
+validateTableNames :: [String] -> Either ErrorMessage ()
+validateTableNames [] = Right ()
+validateTableNames (n:ns)
+  | map toLower n == "where" || map toLower n == "select" || map toLower n == "from" = Left "Wrong syntax(keywords cannot be table names)"
+  | otherwise = validateTableNames ns
+
+splitByTablesByComma :: String -> [String]
+splitByTablesByComma str = words $ map (\c -> if c == ',' then ' ' else c) str
+
+validateCommaSyntax :: String -> Either ErrorMessage ()
+validateCommaSyntax [] = Right ()
+validateCommaSyntax (c:cs)
+    | c == ',' = if null cs 
+        then 
+            Left "Wrong syntax"
+        else
+            case head cs == ',' of
+                False -> validateCommaSyntax (tail cs)
+                True -> Left "Wrong syntax(no column name between commas)"
+    | otherwise = validateCommaSyntax cs
+
+    -- case changeCommasIntoSpaces (findWhere [] words) of
+findWhere :: [String] -> [String] -> ([String], [String])
+findWhere tables [] = (tables, [])
+findWhere tables words =
+    if map toLower (head words) == "where" then (tables, words) else findWhere (tables ++ [head words]) (tail words)
+
+changeCommasIntoSpaces :: String -> String
+changeCommasIntoSpaces =  map (\c -> if c == ',' then ' ' else c)
 
 -- Executes a parsed statemet. Produces a DataFrame. Uses
 -- InMemoryTables.databases a source of data.
