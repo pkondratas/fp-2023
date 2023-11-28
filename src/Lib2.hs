@@ -329,8 +329,8 @@ applyConditions conditions [tableName] = do
     case maybeDataFrame of
         Just (DataFrame columns rows) ->
           if null conditions
-            then return (DataFrame columns rows)
-            else return (DataFrame columns (filterRows conditions table rows))
+            then return (DataFrame (renameColumns tableName columns) rows)
+            else return (DataFrame (renameColumns tableName columns) (filterRows conditions table rows))
         Nothing -> Left "Table not found in the database"
     where
       maybeToDataFrame :: Maybe DataFrame -> DataFrame
@@ -354,7 +354,7 @@ joinTables :: [String] -> DataFrame
 joinTables tableNames =
   foldl (\acc (tableName, df) -> joinTwoTables (head tableNames) acc tableName df) baseTable restTables
   where
-    baseTable = snd (head database)
+    baseTable = snd (findTableByName (head tableNames))
     restTables = map (\tableName -> findTableByName tableName) (tail tableNames)
 
 joinTwoTables :: TableName -> DataFrame -> TableName -> DataFrame -> DataFrame
