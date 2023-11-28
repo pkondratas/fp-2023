@@ -9,6 +9,11 @@ import Data.List qualified as L
 import Lib1 qualified
 import Lib2 qualified
 import Lib3 qualified
+import Data.Aeson (decode)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.ByteString.Lazy.Char8 as BSL
+import DataFrame (ColumnType(..), Column(..), Value(..), Row, DataFrame(..))
 import System.Console.Repline
   ( CompleterStyle (Word),
     ExitDecision (Exit),
@@ -17,6 +22,8 @@ import System.Console.Repline
     evalRepl,
   )
 import System.Console.Terminal.Size (Window, size, width)
+import System.Directory (listDirectory, doesFileExist)
+import System.FilePath (dropExtension, pathSeparator, takeExtension)
 
 type Repl a = HaskelineT IO a
 
@@ -66,3 +73,19 @@ runExecuteIO (Free step) = do
         -- probably you will want to extend the interpreter
         runStep :: Lib3.ExecutionAlgebra a -> IO a
         runStep (Lib3.GetTime next) = getCurrentTime >>= return . next
+        runStep (Lib3.LoadFile table_name next) = do
+          existingFile <- doesFileExist ("db" ++ [pathSeparator] ++ table_name ++ ".json")
+          if existingFile 
+            then do
+              jsonData <- readFile ("db" ++ [pathSeparator] ++ table_name ++ ".json")
+              case decode (BSL.fromStrict $ TE.encodeUtf8 $ T.pack jsonData) :: Maybe DataFrame of
+                Just df -> return $ next $ Right df
+                Nothing -> return $ next $ Left "Wrong data format"
+          else return $ next $ Left ("Table " ++ table_name ++ " does not exist.")
+        runStep (Lib3.SaveFile (table_name, df) next) = 
+          do
+            writeFile ("db" ++ [pathSeparator] ++ table_name ++ ".json") (Lib3.dataFrameToJson df)
+            return $ next (table_name, df)
+          
+
+

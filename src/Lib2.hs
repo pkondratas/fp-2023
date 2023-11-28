@@ -3,6 +3,7 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use isJust" #-}
 {-# OPTIONS_GHC -Wno-unused-matches #-}
+{-# HLINT ignore "Use if" #-}
 
 module Lib2
   ( parseStatement,
@@ -20,6 +21,7 @@ import Data.List (isPrefixOf)
 import Debug.Trace
 import Data.List (groupBy)
 import Data.Char (isSpace)
+import Data.List
 
 type ErrorMessage = String
 type Database = [(TableName, DataFrame.DataFrame)]
@@ -186,16 +188,80 @@ parseStatement query =
       | otherwise = Left "Table name should contain only one word, followed with optional conditions(WHERE)"
 
     -- makes a parsed select depending if there is where clause or not
-    parseSelectStatement :: [String] -> String -> [String] -> Either ErrorMessage ParsedStatement
-    parseSelectStatement cols name [_] = Left "Conditions needed after WHERE."
-    parseSelectStatement cols name [] = Right (SelectStatement cols name "")
-    parseSelectStatement cols name conditions = Right (SelectStatement cols name (unwords (tail conditions)))
+    parseSelectStatement :: [String] -> [String] -> [String] -> Either ErrorMessage ParsedStatement
+    parseSelectStatement cols names [_] = Left "Conditions needed after WHERE."
+    parseSelectStatement cols names [] = Right (SelectStatement cols names "")
+    parseSelectStatement cols names conditions = Right (SelectStatement cols names (unwords (tail conditions)))
 
     -- SHOW TABLE table_name identification 
     identifyShowTableName :: [String] -> Either ErrorMessage ParsedStatement
     identifyShowTableName [] = Left "Specify table name."
     identifyShowTableName (_:_:_) = Left "Table name should contain one word."
     identifyShowTableName (w:ws) = Right (ShowTable w)
+
+distinguishColumnNames :: [String] -> Either ErrorMessage ([String], [String])
+distinguishColumnNames rest = 
+    case findFrom [] rest of
+      Left err -> Left err
+      Right (cols, tablesAndConditions) -> case words (changeCommasIntoSpaces (concat cols)) == words (changeCommasIntoSpaces (unwords cols)) of
+                False -> Left "Wrong syntax: incorrect commas between columns."
+                True -> case concat cols of
+                    [] -> Left "Wrong syntax"
+                    (c:cs) -> if c == ',' then Left "No columns specified before first comma" else 
+                        case validateCommaSyntax cs of
+                            Left err -> Left err
+                            Right () -> case validateTableNames (splitItemsByComma (concat cols)) of
+                                Left err -> Left err
+                                Right () -> Right (splitItemsByComma (concat cols), tablesAndConditions)
+
+
+findFrom :: [String] -> [String] -> Either ErrorMessage ([String], [String])
+findFrom cols [] = Left "Wrong syntax: missing 'FROM' statement"
+findFrom cols words =
+    if map toLower (head words) == "from" then Right (cols, (tail words)) else findFrom (cols ++ [head words]) (tail words)
+
+distinguishTableNames :: [String] -> Either ErrorMessage ([String], [String])
+distinguishTableNames rest = 
+    let (tables, conditions) = findWhere [] rest
+    in case words (changeCommasIntoSpaces (concat tables)) == words (changeCommasIntoSpaces (unwords tables)) of
+        False -> Left ((changeCommasIntoSpaces (concat tables)) ++ " != " ++ (changeCommasIntoSpaces (unwords tables)))
+        True -> case concat tables of
+            [] -> Left "Wrong syntax: no tables found"
+            (c:cs) -> if c == ',' then Left "No columns specified before first comma" else 
+                case validateCommaSyntax cs of
+                    Left err -> Left err
+                    Right () -> case validateTableNames (splitItemsByComma (concat tables)) of
+                        Left err -> Left err
+                        Right () -> Right (splitItemsByComma (concat tables), conditions)
+
+validateTableNames :: [String] -> Either ErrorMessage ()
+validateTableNames [] = Right ()
+validateTableNames (n:ns)
+  | map toLower n == "where" || map toLower n == "select" || map toLower n == "from" = Left "Wrong syntax(keywords cannot be table names)"
+  | otherwise = validateTableNames ns
+
+splitItemsByComma :: String -> [String]
+splitItemsByComma str = words $ map (\c -> if c == ',' then ' ' else c) str
+
+validateCommaSyntax :: String -> Either ErrorMessage ()
+validateCommaSyntax [] = Right ()
+validateCommaSyntax (c:cs)
+    | c == ',' = if null cs 
+        then 
+            Left "Wrong syntax: comma can't be last symbol after table name"
+        else
+            case head cs == ',' of
+                False -> validateCommaSyntax (tail cs)
+                True -> Left "Wrong syntax(no column name between commas)"
+    | otherwise = validateCommaSyntax cs
+
+findWhere :: [String] -> [String] -> ([String], [String])
+findWhere tables [] = (tables, [])
+findWhere tables words =
+    if map toLower (head words) == "where" then (tables, words) else findWhere (tables ++ [head words]) (tail words)
+
+changeCommasIntoSpaces :: String -> String
+changeCommasIntoSpaces =  map (\c -> if c == ',' then ' ' else c)
 
 -- Executes a parsed statemet. Produces a DataFrame. Uses
 -- InMemoryTables.databases a source of data.
@@ -230,6 +296,7 @@ executeStatement (SelectStatement cols table conditions) =
     checkIfAll :: [String] -> Bool
     checkIfAll [n] =
       n == "*"
+    checkIfAll _ = False
 
     -- validates whether columns exist
     validateColumns :: [String] -> [Column] -> [String] -> Bool
@@ -358,25 +425,97 @@ executeStatement (SelectStatement cols table conditions) =
           then Right (DataFrame allCols allRows)
           else Right (DataFrame allCols [head allRows])
 
+--VEIKIMO PRINCIPAS:
+--Paduoda conditionus ir tableName'us
+--Jeigu table tik vienas, tada gauni DataFrame pagal tableName ir iskart paduodi funkcijai
+--Jeigu table daugiau, juos sujungi, tada sujungtus paduodi i funkcija atfiltruoti
+
+--TODO:
+-- Kai yra vienas table, DataFrame nera prefikso prie column'o (pvz.: nera, kad butu table1.col1, o yra tiesiog col1)
 
 -- Filters a DataFrame table by statement conditions
-applyConditions :: String -> String -> Either ErrorMessage DataFrame
-applyConditions conditions tableName = do
+applyConditions :: String -> [String] -> Either ErrorMessage DataFrame
+--Jeigu yra tik vienas tableName
+applyConditions conditions [tableName] = do
     let maybeDataFrame = lookup tableName database
+    let table = maybeToDataFrame maybeDataFrame
     case maybeDataFrame of
-        Just (DataFrame columns rows) -> do
+        Just (DataFrame columns rows) ->
+          if null conditions
+            then return (DataFrame (renameColumns tableName columns) rows)
+            else return (DataFrame (renameColumns tableName columns) (filterRows conditions table rows))
+        Nothing -> Left "Table not found in the database"
+    where
+      maybeToDataFrame :: Maybe DataFrame -> DataFrame
+      maybeToDataFrame maybeDf =
+        case maybeDf of
+          Just df -> df
+          Nothing -> DataFrame [] []
+
+applyConditions conditions tableNames = do
+  let joinedTable = joinTables tableNames
+  case joinedTable of
+        (DataFrame columns rows) ->
           if null conditions
             then return (DataFrame columns rows)
-          else
-            return (DataFrame columns (filterRows conditions tableName rows))
-        Nothing -> Left "Table not found in the database"
+            else return (DataFrame columns (filterRows conditions joinedTable rows))
+
+----------------------
+--For joining tables--
+----------------------
+joinTables :: [String] -> DataFrame
+joinTables tableNames =
+  foldl (\acc (tableName, df) -> joinTwoTables (head tableNames) acc tableName df) baseTable restTables
+  where
+    baseTable = snd (findTableByName (head tableNames))
+    restTables = map (\tableName -> findTableByName tableName) (tail tableNames)
+
+joinTwoTables :: TableName -> DataFrame -> TableName -> DataFrame -> DataFrame
+joinTwoTables tableName1 df1 tableName2 df2 =
+  let commonColumns = findCommonColumns (renameColumns tableName1 (getColumns df1)) (renameColumns tableName2 (getColumns df2))
+      df1Renamed = DataFrame (renameColumns tableName1 (getColumns df1)) (getRows df1)
+      df2Renamed = DataFrame (renameColumns tableName2 (getColumns df2)) (getRows df2)
+      combinedDF = rowMultiplication df1Renamed df2Renamed
+  in removeDuplicateColumns commonColumns combinedDF
+
+findCommonColumns :: [Column] -> [Column] -> [String]
+findCommonColumns cols1 cols2 =
+  [colName1 | Column colName1 _ <- cols1, any (\(Column colName2 _) -> colName1 == colName2) cols2]
+
+renameColumns :: TableName -> [Column] -> [Column]
+renameColumns tableName cols =
+  [Column (tableName ++ "." ++ colName) colType | Column colName colType <- cols]
+
+rowMultiplication :: DataFrame -> DataFrame -> DataFrame
+rowMultiplication (DataFrame cols1 rows1) (DataFrame cols2 rows2) =
+  DataFrame (cols1 ++ cols2) [row1 ++ row2 | row1 <- rows1, row2 <- rows2]
+
+removeDuplicateColumns :: [String] -> DataFrame -> DataFrame
+removeDuplicateColumns commonColumns (DataFrame cols rows) =
+  DataFrame (nubBy (\(Column col1 _) (Column col2 _) -> col1 == col2) cols) rows
+
+getColumns :: DataFrame -> [Column]
+getColumns dataFrame = case dataFrame of
+  (DataFrame columns rows) -> columns
+
+getRows :: DataFrame -> [Row]
+getRows dataFrame = case dataFrame of
+  (DataFrame columns rows) -> rows
+
+-- Helper function to find a table by name in the database
+findTableByName :: String -> (TableName, DataFrame)
+findTableByName tableName =
+  case lookup tableName database of
+    Just df -> (tableName, df)
+    Nothing -> error ("Table not found: " ++ tableName)
+----------------------
 
 -- Filters rows based on the given conditions
-filterRows :: String -> String -> [Row] -> [Row]
+filterRows :: String -> DataFrame -> [Row] -> [Row]
 filterRows conditions table rows =
     [row | row <- rows, checkAll conditions table row == Right True]
 
-checkCondition :: String -> String -> Row -> Either ErrorMessage Bool
+checkCondition :: String -> DataFrame -> Row -> Either ErrorMessage Bool
 checkCondition condition table row = executeCondition (getFirstThreeWords condition)
   where
     getFirstThreeWords :: String -> (String, String, String)
@@ -419,11 +558,13 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
     getValueFromTable :: String -> Row -> Value
     getValueFromTable columnName currentRow =
       let
-        -- Find the DataFrame by the tableName in the database
-        maybeDataFrame = lookup table database
+        toMaybeDataFrame :: DataFrame -> Maybe DataFrame
+        toMaybeDataFrame df = case df of
+          (DataFrame [] []) -> Nothing
+          _ -> Just df
 
         -- Find the column index by columnName
-        maybeColumnIndex = maybeDataFrame >>= \(DataFrame columns _) ->
+        maybeColumnIndex = toMaybeDataFrame table >>= \(DataFrame columns _) ->
           elemIndex columnName (map (\(Column name _) -> name) columns)
 
         -- Get value from the row
@@ -437,17 +578,17 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
     atMay (x:_) 0 = Just x
     atMay (_:xs) n = atMay xs (n - 1)
 
-checkAll :: String -> String -> Row -> Either ErrorMessage Bool
-checkAll conditions tableName row
+checkAll :: String -> DataFrame -> Row -> Either ErrorMessage Bool
+checkAll conditions tableFrame row
     | null conditions = Left "Conditions string is empty"
-    | otherwise = checkAllConditions (splitByAnd conditions) tableName row
+    | otherwise = checkAllConditions (splitByAnd conditions) tableFrame row
 
-checkAllConditions :: [String] -> String -> Row -> Either ErrorMessage Bool
+checkAllConditions :: [String] -> DataFrame -> Row -> Either ErrorMessage Bool
 checkAllConditions [] _ _ = Right True -- Base case: all conditions have been checked and are true
-checkAllConditions (condition:rest) tableName row =
-    case checkCondition condition tableName row of
+checkAllConditions (condition:rest) tableFrame row =
+    case checkCondition condition tableFrame row of
         Left errMsg -> Left errMsg -- If any condition fails, return the error message
-        Right True -> checkAllConditions rest tableName row -- If condition is true, check the rest of the conditions
+        Right True -> checkAllConditions rest tableFrame row -- If condition is true, check the rest of the conditions
         Right False -> Right False -- If condition is false, return false immediately
 
 splitByAnd :: String -> [String]
