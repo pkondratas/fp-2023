@@ -17,6 +17,9 @@ import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.List (isPrefixOf)
+import Debug.Trace
+import Data.List (groupBy)
+import Data.Char (isSpace)
 
 type ErrorMessage = String
 type Database = [(TableName, DataFrame.DataFrame)]
@@ -26,14 +29,39 @@ data ParsedStatement
   = ShowTable String
   | ShowTables
   | SelectStatement [String] String String
+  | InsertStatement String [String] [[String]]
   deriving (Show, Eq)
+
+    -- Function to split the query at whitespaces outside quotes
+splitOnWhitespaceInQuotes :: String -> [String]
+splitOnWhitespaceInQuotes s = filter (not . null) $ case dropWhile isSpace s of
+  "" -> []  -- If the string is empty, return an empty list.
+  ('\'':cs) ->
+    if checkConditionB cs
+      then splitOnWhitespaceInQuotes (dropWhile isSpace cs)
+      else
+        let (word, rest) = break (== '\'') cs
+        in word : splitOnWhitespaceInQuotes (dropWhile isSpace rest)
+  (c:cs) ->
+    let (word, rest) = break isSpace s
+    in if word `elem` [", ", "),"] then splitOnWhitespaceInQuotes (dropWhile isSpace rest)
+       else word : splitOnWhitespaceInQuotes (dropWhile isSpace rest)
+
+checkConditionB :: String -> Bool
+checkConditionB cs = case dropWhile (/= '\'') cs of
+  [] -> False
+  (_:')':_) -> True
+  _ -> False
 
 -- Parses user input into an entity representing a parsed
 -- statement
 parseStatement :: String -> Either ErrorMessage ParsedStatement
 -- parseStatement _ = Left "Not implemented: yooooo"
 parseStatement query =
-  if elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
+  if map toLower (takeWhile (not . isSpace) query) == "insert"
+    then do
+      identifyCommand (splitOnWhitespaceInQuotes query) -- Print cols and valuesBlock identifyCommand (splitOnWhitespaceInQuotes query)
+  else if elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
     then identifyCommand (words (init query))
   else
     Left "Invalid syntax."
@@ -64,6 +92,12 @@ parseStatement query =
       | map toLower command == "select" = case splitSelectStatement q of
         Left err -> Left err
         Right result -> Right result
+      | map toLower command == "insert" = case map toLower (head q) of
+          "into" ->
+            case identifyInsertValues (tail q) of
+              Left err -> Left err
+              Right result -> Right result
+          _ -> Left "Missing 'INTO' keyword after 'INSERT'."
       | otherwise = Left "Wrong query syntax"
 
     splitSelectStatement :: [String] -> Either ErrorMessage ParsedStatement
@@ -84,6 +118,62 @@ parseStatement query =
         -- Helper function to split a string by commas
         splitByComma :: String -> [String]
         splitByComma str = filter (not . null) $ words $ map (\c -> if c == ',' then ' ' else c) str
+
+    -- INSERT INTO table (cols) VALUES (vals), (vals), ...
+    identifyInsertValues :: [String] -> Either ErrorMessage ParsedStatement
+    identifyInsertValues [] = Left "Specify table name and values."
+    identifyInsertValues (table:rest) = do
+      let (cols, restWithoutValues) = span (\s -> map toLower s /= map toLower "values") rest
+      let valuesBlock = dropWhile (\s -> map toLower s == map toLower "values") restWithoutValues
+      if null cols || null valuesBlock
+        then do
+          Left "Invalid INSERT syntax."     
+      else do
+        let columns = map (removeBrackets . cleanName . map toLower) cols
+        let cleanBlock = map cleanName valuesBlock
+        let groupedBlock = groupStrings cleanBlock
+        let nonEmpty = map removeBracketsFromList groupedBlock
+        let valuesLines = removeSpaces nonEmpty
+        if all (all (not . null)) valuesLines && all (not . null) columns
+          then do
+            traceShow (valuesLines) $ return ()
+            traceShow (columns) $ return ()
+            traceShow (table) $ return ()
+            Right (InsertStatement table columns valuesLines)
+        else
+            Left "Invalid INSERT syntax: Empty strings in valuesLines or columns."
+
+    removeSpaces :: [[String]] -> [[String]]
+    removeSpaces = map (filter (/= " "))
+
+    removeBrackets :: String -> String
+    removeBrackets = filter (`notElem` ['(', ')', ',', '[', ']', '{', '}'])
+
+    removeBracketsFromList :: [String] -> [String]
+    removeBracketsFromList = map removeBrackets
+
+    -- Function to check if a string starts with '('
+    startsWithBracket :: String -> Bool
+    startsWithBracket str = head str == '('
+
+    -- Function to check if a string ends with ')' or '),'
+    endsWithBracket :: String -> Bool
+    endsWithBracket str = last str == ')' || last str == ','
+
+    -- Function to group strings based on the bracket conditions
+    groupStrings :: [String] -> [[String]]
+    groupStrings = groupBy (\x y -> (not (startsWithBracket y)) && (not (endsWithBracket x)))
+
+    -- Check if the number of elements in the lists of values match the number of columns
+    checkValuesConsistency :: [String] -> [[String]] -> Either ErrorMessage ()
+    checkValuesConsistency columns valuesLines =
+      if all (\values -> length values == length columns) valuesLines
+        then Right ()
+      else Left "Number of elements in values lists does not match the number of columns."
+
+    -- Clean the column or table name from potential extra characters
+    cleanName :: String -> String
+    cleanName = filter (`notElem` [',', ';', '\''])
 
     -- identifies the name (can't be select where from or any other)
     -- if after from contains more than one word (which are not name and WHERE clause) throws error
@@ -122,7 +212,6 @@ executeStatement (ShowTable table_name) =
 -- execute SHOW TABLES;
 executeStatement ShowTables =
   Right $ DataFrame [Column "Tables" StringType] (map (\(name, _) -> [StringValue name]) database)
-
 
 --execute SELECT cols FROM table WHERE ... AND ... AND ...;
 executeStatement (SelectStatement cols table conditions) =
