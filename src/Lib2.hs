@@ -138,9 +138,6 @@ parseStatement query =
         let valuesLines = removeSpaces nonEmpty
         if all (all (not . null)) valuesLines && all (not . null) columns
           then do
-            traceShow (valuesLines) $ return ()
-            traceShow (columns) $ return ()
-            traceShow (table) $ return ()
             Right (InsertStatement table columns valuesLines)
         else
             Left "Invalid INSERT syntax: Empty strings in valuesLines or columns."
