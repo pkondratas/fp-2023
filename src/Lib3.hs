@@ -1,10 +1,13 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
+{-# OPTIONS_GHC -Wno-incomplete-patterns #-}
 
 module Lib3
   ( executeSql,
     Execution,
-    ExecutionAlgebra(..)
+    ExecutionAlgebra(..),
+    dataFrameToJson
   )
 where
 
@@ -21,28 +24,49 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import DataFrame (ColumnType(..), Column(..), Value(..), Row, DataFrame(..))
+import Lib2
+    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertData),
+      parseStatement,
+      executeStatement )
 
 type TableName = String
 type FileContent = String
 type ErrorMessage = String
 
 data ExecutionAlgebra next
-  = LoadFile TableName (FileContent -> next)
+  = LoadFile TableName (Either ErrorMessage DataFrame -> next)
   | GetTime (UTCTime -> next)
+  | SaveFile (String, DataFrame) ((String, DataFrame) -> next)
   -- feel free to add more constructors here
   deriving Functor
 
 type Execution = Free ExecutionAlgebra
 
-loadFile :: TableName -> Execution FileContent
+loadFile :: TableName -> Execution (Either ErrorMessage DataFrame)
 loadFile name = liftF $ LoadFile name id
 
 getTime :: Execution UTCTime
 getTime = liftF $ GetTime id
 
+saveFile :: (String, DataFrame) -> Execution (String, DataFrame)
+saveFile df = liftF $ SaveFile df id
+
 executeSql :: String -> Execution (Either ErrorMessage DataFrame)
-executeSql sql = do
-    return $ Left "implement me"
+executeSql sql =
+  case parseStatement sql of
+    Left err -> return (Left err)
+    Right (ShowTable table_name) ->
+      case executeStatement (ShowTable table_name) of
+        Left err -> return $ Left err
+        Right df -> return $ Right df
+    Right ShowTables ->
+      case executeStatement ShowTables of
+        Left err -> return $ Left err
+        Right df -> return $ Right df
+    Right (SelectStatement cols (tables:t) conditions) -> do
+      case executeStatement (SelectStatement cols tables conditions) of
+        Left err -> return $ Left err
+        Right df -> return $ Right df
 
 
 columnTypeToJson :: ColumnType -> String
@@ -72,14 +96,11 @@ dataFrameToJson (DataFrame columns rows) =
     columnsJson = intercalate ", " $ map (\col -> "{ " ++ intercalate ", " (map (\(k, v) -> "\"" ++ k ++ "\": \"" ++ v ++ "\"") (columnToJson col)) ++ " }") columns
     rowsJson = intercalate ", " $ map (\row -> "[" ++ intercalate ", " (rowToJson row) ++ "]") rows
 
-
 --main :: IO ()
 --main = do
   --let testDataFrame = DataFrame [Column "id" IntegerType, Column "name" StringType, Column "surname" StringType][ ]
   --writeFile "output.json" (dataFrameToJson testDataFrame)
   --putStrLn "DataFrame written to output.json"
-
-
 
 instance FromJSON ColumnType where
   parseJSON (String "integer") = return IntegerType
@@ -98,9 +119,9 @@ instance FromJSON Value where
   parseJSON (Object v) = (IntegerValue <$> v .: "IntegerValue")
    <|> (StringValue <$> v .: "StringValue")
    <|> (BoolValue <$> v .: "BoolValue")
-   <|> pure NullValue 
+   <|> pure NullValue
   parseJSON _ = fail "Failed to parse Value"
-  
+
 
 instance FromJSON DataFrame where
   parseJSON (Object v) = do
@@ -109,10 +130,9 @@ instance FromJSON DataFrame where
     return $ DataFrame columns rows
   parseJSON _ = fail "Invalid DataFrame"
 
-                                                  
 --main :: IO ()
 --main = do
-  --jsonData <- readFile "C:\\Users\\Dovix\\Desktop\\GIT\\fp-2023\\output.json"
+  --jsonData <- -- path
   --let parsedData = decode (BSL.fromStrict $ TE.encodeUtf8 $ T.pack jsonData) :: Maybe DataFrame
   --case parsedData of
     --Just df -> print df

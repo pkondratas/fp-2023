@@ -92,7 +92,7 @@ distinguishColumnNames rest =
       Right (cols, tablesAndConditions) -> case words (changeCommasIntoSpaces (concat cols)) == words (changeCommasIntoSpaces (unwords cols)) of
                 False -> Left "Wrong syntax: incorrect commas between columns."
                 True -> case concat cols of
-                    [] -> Left "Wrong syntaxxx"
+                    [] -> Left "Wrong syntax"
                     (c:cs) -> if c == ',' then Left "No columns specified before first comma" else 
                         case validateCommaSyntax cs of
                             Left err -> Left err

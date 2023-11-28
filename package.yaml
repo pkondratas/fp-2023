@@ -24,6 +24,8 @@ dependencies:
 - aeson
 - text
 - bytestring
+- filepath
+- directory
 
 default-extensions:
 - ImportQualifiedPost
