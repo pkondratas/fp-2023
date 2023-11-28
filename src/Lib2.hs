@@ -60,7 +60,7 @@ checkConditionB cs = case dropWhile (/= '\'') cs of
 parseStatement :: String -> Either ErrorMessage ParsedStatement
 -- parseStatement _ = Left "Not implemented: yooooo"
 parseStatement query =
-  if map toLower (takeWhile (not . isSpace) query) == "insert"
+  if map toLower (takeWhile (not . isSpace) query) == "insert" && elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
     then do
       identifyCommand (splitOnWhitespaceInQuotes query) -- Print cols and valuesBlock identifyCommand (splitOnWhitespaceInQuotes query)
   else if elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
