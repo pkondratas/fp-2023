@@ -2,6 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 {-# OPTIONS_GHC -Wno-incomplete-patterns #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Replace case with fromMaybe" #-}
+{-# HLINT ignore "Use zipWith" #-}
 
 module Lib3
   ( executeSql,
@@ -23,11 +26,12 @@ import Control.Applicative ((<$>), (<*>), (<|>))
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy.Char8 as BSL
-import DataFrame (ColumnType(..), Column(..), Value(..), Row, DataFrame(..))
+import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
-    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertData),
+    ( ParsedStatement(SelectStatement, ShowTable, ShowTables),
       parseStatement,
-      executeStatement )
+      executeStatement,
+      checkAll )
 
 type TableName = String
 type FileContent = String
@@ -63,10 +67,36 @@ executeSql sql =
       case executeStatement ShowTables of
         Left err -> return $ Left err
         Right df -> return $ Right df
-    Right (SelectStatement cols (tables:t) conditions) -> do
+    Right (SelectStatement cols tables conditions) -> do
       case executeStatement (SelectStatement cols tables conditions) of
         Left err -> return $ Left err
         Right df -> return $ Right df
+
+
+
+updateDataFrame :: DataFrame -> [Column] -> [Value] -> String -> DataFrame
+updateDataFrame (DataFrame columns rows) updateColumns newValues condition =
+  let updateRow row =
+        case checkAll condition (DataFrame columns [row]) row of
+          Right True  -> updateRowValues row
+          _           -> row
+          
+      updateRowValues row =
+        let updatedRow = zipWith updateValue columns row
+        in updatedRow
+      
+      updateValue (Column colName colType) oldValue =
+        case lookup colName (zipWithColumnAndValue updateColumns newValues) of
+          Just newValue -> newValue
+          Nothing       -> oldValue
+      
+      zipWithColumnAndValue :: [Column] -> [Value] -> [(String, Value)]
+      zipWithColumnAndValue cols vals =
+        map (\(Column colName _, value) -> (colName, value)) (zip cols vals)
+      
+      updatedRows = map updateRow rows
+  in DataFrame columns updatedRows
+
 
 
 columnTypeToJson :: ColumnType -> String

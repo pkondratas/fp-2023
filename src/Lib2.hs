@@ -8,6 +8,7 @@
 module Lib2
   ( parseStatement,
     executeStatement,
+    checkAll,
     ParsedStatement(..)
   )
 where
@@ -312,14 +313,6 @@ executeStatement (SelectStatement cols table conditions) =
           then Right (DataFrame allCols allRows)
           else Right (DataFrame allCols [head allRows])
 
---VEIKIMO PRINCIPAS:
---Paduoda conditionus ir tableName'us
---Jeigu table tik vienas, tada gauni DataFrame pagal tableName ir iskart paduodi funkcijai
---Jeigu table daugiau, juos sujungi, tada sujungtus paduodi i funkcija atfiltruoti
-
---TODO:
--- Kai yra vienas table, DataFrame nera prefikso prie column'o (pvz.: nera, kad butu table1.col1, o yra tiesiog col1)
-
 -- Filters a DataFrame table by statement conditions
 applyConditions :: String -> [String] -> Either ErrorMessage DataFrame
 --Jeigu yra tik vienas tableName
@@ -338,7 +331,7 @@ applyConditions conditions [tableName] = do
         case maybeDf of
           Just df -> df
           Nothing -> DataFrame [] []
-
+--Jeigu yra daugiau
 applyConditions conditions tableNames = do
   let joinedTable = joinTables tableNames
   case joinedTable of
@@ -467,7 +460,7 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
 
 checkAll :: String -> DataFrame -> Row -> Either ErrorMessage Bool
 checkAll conditions tableFrame row
-    | null conditions = Left "Conditions string is empty"
+    | null conditions = Right True
     | otherwise = checkAllConditions (splitByAnd conditions) tableFrame row
 
 checkAllConditions :: [String] -> DataFrame -> Row -> Either ErrorMessage Bool
