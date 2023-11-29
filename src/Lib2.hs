@@ -4,6 +4,7 @@
 {-# HLINT ignore "Use isJust" #-}
 {-# OPTIONS_GHC -Wno-unused-matches #-}
 {-# HLINT ignore "Use if" #-}
+{-# HLINT ignore "Use guards" #-}
 
 module Lib2
   ( parseStatement,
@@ -31,7 +32,7 @@ type Database = [(TableName, DataFrame.DataFrame)]
 data ParsedStatement
   = ShowTable String
   | ShowTables
-  | SelectStatement [String] String String
+  | SelectStatement [String] [String] String
   | InsertStatement String [String] [[String]]
   deriving (Show, Eq)
 
@@ -106,8 +107,8 @@ parseStatement query =
     splitSelectStatement :: [String] -> Either ErrorMessage ParsedStatement
     splitSelectStatement q = do
         (a, b) <- splitColumns [] q
-        (name, conditions) <- identifySelectTableName b
-        parseSelectStatement a name conditions
+        (names, conditions) <- distinguishTableNames b
+        parseSelectStatement a names conditions
 
     -- splits columns until finds from (if where or select - error)
     splitColumns :: [String] -> [String] -> Either ErrorMessage ([String], [String])
@@ -174,16 +175,6 @@ parseStatement query =
     -- Clean the column or table name from potential extra characters
     cleanName :: String -> String
     cleanName = filter (`notElem` [',', ';', '\''])
-
-    -- identifies the name (can't be select where from or any other)
-    -- if after from contains more than one word (which are not name and WHERE clause) throws error
-    identifySelectTableName :: [String] -> Either ErrorMessage (String, [String])
-    identifySelectTableName [] = Left "No table name after FROM."
-    identifySelectTableName (w:ws)
-      | map toLower w == "where" || map toLower w == "from" || map toLower w == "select" = Left "Table name can not be a SQL statement."
-      | null ws = Right (w, ws)
-      | map toLower (head ws) == "where" = Right (w, ws)
-      | otherwise = Left "Table name should contain only one word, followed with optional conditions(WHERE)"
 
     -- makes a parsed select depending if there is where clause or not
     parseSelectStatement :: [String] -> [String] -> [String] -> Either ErrorMessage ParsedStatement
