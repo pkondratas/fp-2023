@@ -86,6 +86,10 @@ runExecuteIO (Free step) = do
           do
             writeFile ("db" ++ [pathSeparator] ++ table_name ++ ".json") (Lib3.dataFrameToJson df)
             return $ next (table_name, df)
+        runStep (Lib3.GetTableNames next) = do
+            files <- listDirectory "db"
+            let tableNames = foldl (\acc fileName -> if takeExtension fileName == ".json" then dropExtension fileName : acc else acc) [] files
+            return $ next tableNames
           
 
 

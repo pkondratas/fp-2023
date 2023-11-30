@@ -10,6 +10,7 @@ module Lib2
   ( parseStatement,
     executeStatement,
     checkAll,
+    applyConditions,
     ParsedStatement(..)
   )
 where
@@ -269,8 +270,8 @@ executeStatement ShowTables =
   Right $ DataFrame [Column "Tables" StringType] (map (\(name, _) -> [StringValue name]) database)
 
 --execute SELECT cols FROM table WHERE ... AND ... AND ...;
-executeStatement (SelectStatement cols table conditions) =
-  case applyConditions conditions table of
+executeStatement (SelectStatement cols tables conditions) =
+  case applyConditions conditions tables dataFrames of
     Left err -> Left err
     Right (DataFrame c r) ->
       if validateColumns (map (\(Column name _) -> name) c) c cols
@@ -282,6 +283,18 @@ executeStatement (SelectStatement cols table conditions) =
       else
         Left "(Some of the) Column(s) not found."
   where
+    --Cia gaunami DataFrame is tableName
+    dataFrames = toDataFrames tables
+
+    toDataFrames :: [String] -> [DataFrame]
+    toDataFrames tables = map getDataFrame tables
+      where
+        getDataFrame :: String -> DataFrame
+        getDataFrame name = case lookup name database of
+          Just df -> df
+          Nothing -> DataFrame [] []
+    --
+
     checkIfAll :: [String] -> Bool
     checkIfAll [n] =
       n == "*"
@@ -415,26 +428,18 @@ executeStatement (SelectStatement cols table conditions) =
           else Right (DataFrame allCols [head allRows])
 
 -- Filters a DataFrame table by statement conditions
-applyConditions :: String -> [String] -> Either ErrorMessage DataFrame
+applyConditions :: String -> [String] -> [DataFrame] -> Either ErrorMessage DataFrame
 --Jeigu yra tik vienas tableName
-applyConditions conditions [tableName] = do
-    let maybeDataFrame = lookup tableName database
-    let table = maybeToDataFrame maybeDataFrame
-    case maybeDataFrame of
-        Just (DataFrame columns rows) ->
-          if null conditions
-            then return (DataFrame (renameColumns tableName columns) rows)
-            else return (DataFrame (renameColumns tableName columns) (filterRows conditions table rows))
-        Nothing -> Left "Table not found in the database"
-    where
-      maybeToDataFrame :: Maybe DataFrame -> DataFrame
-      maybeToDataFrame maybeDf =
-        case maybeDf of
-          Just df -> df
-          Nothing -> DataFrame [] []
+applyConditions conditions [tableName] [table] = do
+    case table of
+      (DataFrame columns rows) ->
+        if null conditions
+          then return (DataFrame (renameColumns tableName columns) rows)
+          else return (DataFrame (renameColumns tableName columns) (filterRows conditions table rows))
+
 --Jeigu yra daugiau
-applyConditions conditions tableNames = do
-  let joinedTable = joinTables tableNames
+applyConditions conditions tableNames tables = do
+  let joinedTable = joinTables tableNames tables
   case joinedTable of
         (DataFrame columns rows) ->
           if null conditions
@@ -444,12 +449,12 @@ applyConditions conditions tableNames = do
 ----------------------
 --For joining tables--
 ----------------------
-joinTables :: [String] -> DataFrame
-joinTables tableNames =
+joinTables :: [String] -> [DataFrame] -> DataFrame
+joinTables tableNames tables =
   foldl (\acc (tableName, df) -> joinTwoTables (head tableNames) acc tableName df) baseTable restTables
   where
-    baseTable = snd (findTableByName (head tableNames))
-    restTables = map (\tableName -> findTableByName tableName) (tail tableNames)
+    baseTable = head tables
+    restTables =  zip (tail tableNames) (tail tables)
 
 joinTwoTables :: TableName -> DataFrame -> TableName -> DataFrame -> DataFrame
 joinTwoTables tableName1 df1 tableName2 df2 =
