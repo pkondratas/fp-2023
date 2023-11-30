@@ -4,10 +4,12 @@
 {-# HLINT ignore "Use isJust" #-}
 {-# OPTIONS_GHC -Wno-unused-matches #-}
 {-# HLINT ignore "Use if" #-}
+{-# HLINT ignore "Use guards" #-}
 
 module Lib2
   ( parseStatement,
     executeStatement,
+    checkAll,
     ParsedStatement(..)
   )
 where
@@ -17,6 +19,10 @@ import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType
 import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
+import Data.List (isPrefixOf)
+import Debug.Trace
+import Data.List (groupBy)
+import Data.Char (isSpace)
 import Data.List
 
 type ErrorMessage = String
@@ -27,14 +33,39 @@ data ParsedStatement
   = ShowTable String
   | ShowTables
   | SelectStatement [String] [String] String
+  | InsertStatement String [String] [[String]]
   deriving (Show, Eq)
+
+    -- Function to split the query at whitespaces outside quotes
+splitOnWhitespaceInQuotes :: String -> [String]
+splitOnWhitespaceInQuotes s = filter (not . null) $ case dropWhile isSpace s of
+  "" -> []  -- If the string is empty, return an empty list.
+  ('\'':cs) ->
+    if checkConditionB cs
+      then splitOnWhitespaceInQuotes (dropWhile isSpace cs)
+      else
+        let (word, rest) = break (== '\'') cs
+        in word : splitOnWhitespaceInQuotes (dropWhile isSpace rest)
+  (c:cs) ->
+    let (word, rest) = break isSpace s
+    in if word `elem` [", ", "),"] then splitOnWhitespaceInQuotes (dropWhile isSpace rest)
+       else word : splitOnWhitespaceInQuotes (dropWhile isSpace rest)
+
+checkConditionB :: String -> Bool
+checkConditionB cs = case dropWhile (/= '\'') cs of
+  [] -> False
+  (_:')':_) -> True
+  _ -> False
 
 -- Parses user input into an entity representing a parsed
 -- statement
 parseStatement :: String -> Either ErrorMessage ParsedStatement
 -- parseStatement _ = Left "Not implemented: yooooo"
 parseStatement query =
-  if elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
+  if map toLower (takeWhile (not . isSpace) query) == "insert" && elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
+    then do
+      identifyCommand (splitOnWhitespaceInQuotes query) -- Print cols and valuesBlock identifyCommand (splitOnWhitespaceInQuotes query)
+  else if elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
     then identifyCommand (words (init query))
   else
     Left "Invalid syntax."
@@ -65,13 +96,85 @@ parseStatement query =
       | map toLower command == "select" = case splitSelectStatement q of
         Left err -> Left err
         Right result -> Right result
+      | map toLower command == "insert" = case map toLower (head q) of
+          "into" ->
+            case identifyInsertValues (tail q) of
+              Left err -> Left err
+              Right result -> Right result
+          _ -> Left "Missing 'INTO' keyword after 'INSERT'."
       | otherwise = Left "Wrong query syntax"
 
     splitSelectStatement :: [String] -> Either ErrorMessage ParsedStatement
     splitSelectStatement q = do
-        (a, b) <- distinguishColumnNames q
+        (a, b) <- splitColumns [] q
         (names, conditions) <- distinguishTableNames b
         parseSelectStatement a names conditions
+
+    -- splits columns until finds from (if where or select - error)
+    splitColumns :: [String] -> [String] -> Either ErrorMessage ([String], [String])
+    splitColumns cols [] = Left "Wrong query syntax"
+    splitColumns cols w
+      | map toLower (head w) == "where" || map toLower (head w) == "select" = Left "Wrong SELECT/WHERE placement/count."
+      | map toLower (head w) == "from" && null cols = Left "No columns specified"
+      | map toLower (head w) == "from" = Right (cols, tail w)
+      | otherwise = splitColumns (cols ++ splitByComma (head w)) (tail w)
+      where
+        -- Helper function to split a string by commas
+        splitByComma :: String -> [String]
+        splitByComma str = filter (not . null) $ words $ map (\c -> if c == ',' then ' ' else c) str
+
+    -- INSERT INTO table (cols) VALUES (vals), (vals), ...
+    identifyInsertValues :: [String] -> Either ErrorMessage ParsedStatement
+    identifyInsertValues [] = Left "Specify table name and values."
+    identifyInsertValues (table:rest) = do
+      let (cols, restWithoutValues) = span (\s -> map toLower s /= map toLower "values") rest
+      let valuesBlock = dropWhile (\s -> map toLower s == map toLower "values") restWithoutValues
+      if null cols || null valuesBlock
+        then do
+          Left "Invalid INSERT syntax."     
+      else do
+        let columns = map (removeBrackets . cleanName . map toLower) cols
+        let cleanBlock = map cleanName valuesBlock
+        let groupedBlock = groupStrings cleanBlock
+        let nonEmpty = map removeBracketsFromList groupedBlock
+        let valuesLines = removeSpaces nonEmpty
+        if all (all (not . null)) valuesLines && all (not . null) columns
+          then do
+            Right (InsertStatement table columns valuesLines)
+        else
+            Left "Invalid INSERT syntax: Empty strings in valuesLines or columns."
+
+    removeSpaces :: [[String]] -> [[String]]
+    removeSpaces = map (filter (/= " "))
+
+    removeBrackets :: String -> String
+    removeBrackets = filter (`notElem` ['(', ')', ',', '[', ']', '{', '}'])
+
+    removeBracketsFromList :: [String] -> [String]
+    removeBracketsFromList = map removeBrackets
+
+    -- Function to check if a string starts with '('
+    startsWithBracket :: String -> Bool
+    startsWithBracket str = head str == '('
+
+    -- Function to check if a string ends with ')' or '),'
+    endsWithBracket :: String -> Bool
+    endsWithBracket str = last str == ')' || last str == ','
+
+    -- Function to group strings based on the bracket conditions
+    groupStrings :: [String] -> [[String]]
+    groupStrings = groupBy (\x y -> (not (startsWithBracket y)) && (not (endsWithBracket x)))
+
+    -- Check if the number of elements in the lists of values match the number of columns
+    checkValuesConsistency :: [String] -> [[String]] -> Either ErrorMessage ()
+    checkValuesConsistency columns valuesLines =
+      if all (\values -> length values == length columns) valuesLines
+        then Right ()
+      else Left "Number of elements in values lists does not match the number of columns."
+
+    -- Clean the column or table name from potential extra characters
+    cleanName :: String -> String
+    cleanName = filter (`notElem` [',', ';', '\''])
 
     -- makes a parsed select depending if there is where clause or not
     parseSelectStatement :: [String] -> [String] -> [String] -> Either ErrorMessage ParsedStatement
@@ -164,7 +267,6 @@ executeStatement (ShowTable table_name) =
 -- execute SHOW TABLES;
 executeStatement ShowTables =
   Right $ DataFrame [Column "Tables" StringType] (map (\(name, _) -> [StringValue name]) database)
-
 
 --execute SELECT cols FROM table WHERE ... AND ... AND ...;
 executeStatement (SelectStatement cols table conditions) =
@@ -312,14 +414,6 @@ executeStatement (SelectStatement cols table conditions) =
           then Right (DataFrame allCols allRows)
           else Right (DataFrame allCols [head allRows])
 
---VEIKIMO PRINCIPAS:
---Paduoda conditionus ir tableName'us
---Jeigu table tik vienas, tada gauni DataFrame pagal tableName ir iskart paduodi funkcijai
---Jeigu table daugiau, juos sujungi, tada sujungtus paduodi i funkcija atfiltruoti
-
---TODO:
--- Kai yra vienas table, DataFrame nera prefikso prie column'o (pvz.: nera, kad butu table1.col1, o yra tiesiog col1)
-
 -- Filters a DataFrame table by statement conditions
 applyConditions :: String -> [String] -> Either ErrorMessage DataFrame
 --Jeigu yra tik vienas tableName
@@ -338,7 +432,7 @@ applyConditions conditions [tableName] = do
         case maybeDf of
           Just df -> df
           Nothing -> DataFrame [] []
-
+--Jeigu yra daugiau
 applyConditions conditions tableNames = do
   let joinedTable = joinTables tableNames
   case joinedTable of
@@ -467,7 +561,7 @@ checkCondition condition table row = executeCondition (getFirstThreeWords condit
 
 checkAll :: String -> DataFrame -> Row -> Either ErrorMessage Bool
 checkAll conditions tableFrame row
-    | null conditions = Left "Conditions string is empty"
+    | null conditions = Right True
     | otherwise = checkAllConditions (splitByAnd conditions) tableFrame row
 
 checkAllConditions :: [String] -> DataFrame -> Row -> Either ErrorMessage Bool

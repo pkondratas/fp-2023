@@ -3,6 +3,9 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 {-# OPTIONS_GHC -Wno-incomplete-patterns #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Replace case with fromMaybe" #-}
+{-# HLINT ignore "Use zipWith" #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Eta reduce" #-}
 
 module Lib3
@@ -19,11 +22,12 @@ import DataFrame (DataFrame)
 import Data.Time ( UTCTime )
 import Data.Aeson hiding (Value)
 import Control.Applicative ((<|>))
-import DataFrame (ColumnType(..), Column(..), Value(..), Row, DataFrame(..))
+import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
     ( ParsedStatement(SelectStatement, ShowTable, ShowTables),
       parseStatement,
-      executeStatement )
+      executeStatement,
+      checkAll )
 import Control.Monad.Trans.Error (Error)
 import GHC.Windows (errCodeToIOError)
 import Text.Read (readMaybe)
@@ -178,6 +182,32 @@ hasDuplicates xs =
     Right ()
 
 -- json parsinimas
+
+updateDataFrame :: DataFrame -> [Column] -> [Value] -> String -> DataFrame
+updateDataFrame (DataFrame columns rows) updateColumns newValues condition =
+  let updateRow row =
+        case checkAll condition (DataFrame columns [row]) row of
+          Right True  -> updateRowValues row
+          _           -> row
+          
+      updateRowValues row =
+        let updatedRow = zipWith updateValue columns row
+        in updatedRow
+      
+      updateValue (Column colName colType) oldValue =
+        case lookup colName (zipWithColumnAndValue updateColumns newValues) of
+          Just newValue -> newValue
+          Nothing       -> oldValue
+      
+      zipWithColumnAndValue :: [Column] -> [Value] -> [(String, Value)]
+      zipWithColumnAndValue cols vals =
+        map (\(Column colName _, value) -> (colName, value)) (zip cols vals)
+      
+      updatedRows = map updateRow rows
+  in DataFrame columns updatedRows
+
+
+
 columnTypeToJson :: ColumnType -> String
 columnTypeToJson IntegerType = "integer"
 columnTypeToJson StringType  = "string"
