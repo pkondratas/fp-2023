@@ -38,27 +38,6 @@ data ParsedStatement
   | DeleteStatement String String
   deriving (Show, Eq)
 
-    -- Function to split the query at whitespaces outside quotes
-splitOnWhitespaceInQuotes :: String -> [String]
-splitOnWhitespaceInQuotes s = filter (not . null) $ case dropWhile isSpace s of
-  "" -> []  -- If the string is empty, return an empty list.
-  ('\'':cs) ->
-    if checkConditionB cs
-      then splitOnWhitespaceInQuotes (dropWhile isSpace cs)
-      else
-        let (word, rest) = break (== '\'') cs
-        in word : splitOnWhitespaceInQuotes (dropWhile isSpace rest)
-  (c:cs) ->
-    let (word, rest) = break isSpace s
-    in if word `elem` [", ", "),"] then splitOnWhitespaceInQuotes (dropWhile isSpace rest)
-       else word : splitOnWhitespaceInQuotes (dropWhile isSpace rest)
-
-checkConditionB :: String -> Bool
-checkConditionB cs = case dropWhile (/= '\'') cs of
-  [] -> False
-  (_:')':_) -> True
-  _ -> False
-
 -- Parses user input into an entity representing a parsed
 -- statement
 parseStatement :: String -> Either ErrorMessage ParsedStatement
@@ -67,6 +46,9 @@ parseStatement query =
   if map toLower (takeWhile (not . isSpace) query) == "insert" && elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
     then do
       identifyCommand (splitOnWhitespaceInQuotes query) -- Print cols and valuesBlock identifyCommand (splitOnWhitespaceInQuotes query)
+  else if map toLower (takeWhile (not . isSpace) query) == "update" && elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
+    then do
+      identifyCommand (splitOnWhitespaceInQuotes2 query)
   else if elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
     then identifyCommand (words (init query))
   else
@@ -101,6 +83,9 @@ parseStatement query =
       | map toLower command == "delete" = case splitDeleteStatement q of
         Left err -> Left err
         Right result -> Right result
+      | map toLower command == "update" = case splitUpdateStatement q of
+        Left err -> Left err
+        Right result -> Right result
       | map toLower command == "insert" = case map toLower (head q) of
           "into" ->
             case identifyInsertValues (tail q) of
@@ -108,12 +93,79 @@ parseStatement query =
               Right result -> Right result
           _ -> Left "Missing 'INTO' keyword after 'INSERT'."
       | otherwise = Left "Wrong query syntax"
+      
+                -- Function to split the query at whitespaces outside quotes
+    splitOnWhitespaceInQuotes :: String -> [String]
+    splitOnWhitespaceInQuotes s = filter (not . null) $ case dropWhile isSpace s of
+      "" -> []  -- If the string is empty, return an empty list.
+      ('\'':cs) ->
+        if checkConditionB cs
+          then splitOnWhitespaceInQuotes (dropWhile isSpace cs)
+          else
+            let (word, rest) = break (== '\'') cs
+            in word : splitOnWhitespaceInQuotes (dropWhile isSpace rest)
+      (c:cs) ->
+        let (word, rest) = break isSpace s
+        in if word `elem` [", ", "),"] then splitOnWhitespaceInQuotes (dropWhile isSpace rest)
+          else word : splitOnWhitespaceInQuotes (dropWhile isSpace rest)
+
+    checkConditionB :: String -> Bool
+    checkConditionB cs = case dropWhile (/= '\'') cs of
+      [] -> False
+      (_:')':_) -> True
+      _ -> False
+    
+    splitOnWhitespaceInQuotes2 :: String -> [String]
+    splitOnWhitespaceInQuotes2 s =
+      filter (not . null) $ case dropWhile isSpace s of
+        "" -> []  -- If the string is empty, return an empty list.
+        ('\'':cs) ->
+          let (word, rest) = break (== '\'') cs
+          in ('\'':word ++ "'") : splitOnWhitespaceInQuotes2 (dropWhile isSpace (tail rest))
+        (c:cs) ->
+          let (word, rest) = break (\x -> isSpace x) s
+          in word : splitOnWhitespaceInQuotes2 (dropWhile isSpace rest)
 
     splitSelectStatement :: [String] -> Either ErrorMessage ParsedStatement
     splitSelectStatement q = do
         (a, b) <- splitColumns [] q
         (names, conditions) <- distinguishTableNames b
         parseSelectStatement a names conditions
+
+    splitUpdateStatement :: [String] -> Either ErrorMessage ParsedStatement
+    splitUpdateStatement queryTokens =
+      -- Check if the query contains the necessary components
+      if elemIndex "set" (map (map toLower) queryTokens) /= Nothing &&
+        elemIndex "where" (map (map toLower) queryTokens) /= Nothing
+        then do
+          -- Extract and process the relevant parts of the query
+          let lowershit = map (map toLower) queryTokens
+          let (tableName, restAfterUpdate) = break (== "set") lowershit
+          if length tableName /= 1
+            then Left "Invalid Table Name." 
+            else do
+              let (updatePairs, conditions) = break (== "where") (tail restAfterUpdate)
+              let (valuesFinal, updatedColumns) = parsePairs updatePairs
+              let values = filter (not . null) (map cleanName valuesFinal)
+              let cols = filter (not . null) (map cleanName updatedColumns)
+              if length values /= length updatedColumns 
+                then Left "Invalid Syntax. Value count doesnt match column count" 
+                else do
+                  let combinedConditions = unwords (tail conditions)
+                  Right (UpdateStatement tableName cols values (init combinedConditions))
+          else do
+            traceShow (map (map toLower) queryTokens) $ return ()
+            Left "Invalid UPDATE query syntax."
+
+    parsePairs :: [String] -> ([String], [String])
+    parsePairs [] = ([], [])  -- Base case for an empty list
+    parsePairs (x:xs)
+        | "=" `isInfixOf` x =  -- Check if the string contains "="
+            let (columns, values) = parsePairs (tail xs)
+            in (columns, (head xs): values)  -- Using tail to skip the "="
+        | otherwise =         
+            let (columns, values) = parsePairs xs
+            in (x : columns, values)
 
     -- Parse delete statement
     splitDeleteStatement :: [String] -> Either ErrorMessage ParsedStatement
