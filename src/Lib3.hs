@@ -5,6 +5,8 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Replace case with fromMaybe" #-}
 {-# HLINT ignore "Use zipWith" #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Eta reduce" #-}
 
 module Lib3
   ( executeSql,
@@ -15,20 +17,16 @@ module Lib3
 where
 
 import Data.Char
-import Data.List ( intercalate, elemIndex, isPrefixOf )
+import Data.List ( intercalate, elemIndex, isPrefixOf, nub )
 import Control.Monad.Free (Free (..), liftF)
 import DataFrame (DataFrame)
 import Data.Time ( UTCTime )
 import Data.Aeson hiding (Value)
-import Data.Aeson.Types (Parser)
-import Data.String (IsString, fromString)
-import Control.Applicative ((<$>), (<*>), (<|>))
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import qualified Data.ByteString.Lazy.Char8 as BSL
+import Control.Applicative ((<|>))
+import Text.Read (readMaybe)
 import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
-    ( ParsedStatement(SelectStatement, ShowTable, ShowTables),
+    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement),
       parseStatement,
       checkAll,
       applyConditions )
@@ -65,23 +63,115 @@ executeSql sql =
     Left err -> return (Left err)
     Right (ShowTable table_name) ->
       executeStatement (ShowTable table_name)
-    Right ShowTables ->
-      executeStatement ShowTables
-    Right (SelectStatement cols tables conditions) ->
-      executeStatement (SelectStatement cols tables conditions)
+    Right ShowTables -> executeStatement ShowTables
+    Right (SelectStatement cols tables conditions) -> executeStatement (SelectStatement cols tables conditions)
+    Right (InsertStatement table_name cols values) -> do
+      result <- loadFile table_name
+      case result of 
+        Left err -> return $ Left err
+        Right (DataFrame cls rws) -> do
+          case parseRows cls cols values of
+            Left err -> return $ Left err
+            Right newRows -> do 
+              (_, df) <- saveFile (table_name, DataFrame cls (rws ++ newRows))
+              return $ Right df
 
---TODO:
---executeStatement su UPDATE
+parseRows :: [Column] -> [String] -> [[String]] -> Either ErrorMessage [Row]
+parseRows table_cols cols values = do
+  () <- validateInput table_cols cols values
+  return (createRows table_cols cols values)
 
---VEIKIMO PRINCIPAS:
---Gauna table, columns, values ir condition
---Su loadFile gauna DataFrame is failo
---[String] tipo values pakeicia i [Values] tipa
---Iskviecia updateDataFrame funkcija ir gauna updatinta DataFrame
---Pabaigoje iskviecia funkcija saveFile su updatintu DataFrame
+createRows :: [Column] -> [String] -> [[String]] -> [Row]
+createRows _ _ [] = []
+createRows table_cols cols (v:vs) =
+  createRow table_cols cols v : createRows table_cols cols vs
 
---executeStatement :: String -> [String] -> [String] -> String
---executeStatement table columns values condition = ...
+createRow :: [Column] -> [String] -> [String] -> [Value]
+createRow [] _ _ = []
+createRow ((Column name dtype):tcls) cols values =
+  createValueForRow name dtype cols values : createRow tcls cols values
+
+createValueForRow :: String -> ColumnType -> [String] -> [String] -> Value
+createValueForRow _ _ [] [] = NullValue
+createValueForRow name dtype (c:cs) (v:vs) =
+  if name == c
+    then case dtype of
+      IntegerType -> IntegerValue (getValueFromMaybe (stringToInt v))
+      StringType  -> StringValue v
+      BoolType    -> BoolValue (getValueFromMaybe (stringToBool v))
+  else
+    createValueForRow name dtype cs vs
+
+validateInput :: [Column] -> [String] -> [[String]] -> Either ErrorMessage ()
+validateInput table_cols cols values = do
+    () <- validateColumnNames (getStringValues table_cols) cols
+    () <- validateNewValues table_cols cols values
+    () <- hasDuplicates cols
+    return ()
+
+validateNewValues :: [Column] -> [String] -> [[String]] -> Either ErrorMessage ()
+validateNewValues _ _ [] = Right ()
+validateNewValues tcols cols (r:rs) =
+  case validateRow cols r of
+    Left err -> Left err
+    Right () -> validateNewValues tcols cols rs
+  where
+    validateRow :: [String] -> [String] -> Either ErrorMessage ()
+    validateRow [] [] = Right ()
+    validateRow [] _  = Left "Too many values"
+    validateRow _ []  = Left "Not enough values provided"
+    validateRow (n:ns) (rw:rws) =
+      case validateValue tcols n rw of
+        Left err -> Left err
+        Right () -> validateRow ns rws
+
+    validateValue :: [Column] -> String -> String -> Either ErrorMessage ()
+    validateValue [] _ _ = Left "Column wasn't found"
+    validateValue ((Column name dtype):tcs) n rw =
+      if name == n
+        then case dtype of
+          IntegerType -> do
+            case stringToInt rw of
+              Just _   -> Right ()
+              Nothing  -> Left ("Value " ++ rw ++ " is not integer")
+          StringType  -> Right ()
+          BoolType    ->
+            case stringToBool rw of
+              Just _   -> Right ()
+              Nothing  -> Left ("Value " ++ rw ++ " is not bool")
+      else validateValue tcs n rw
+
+validateColumnNames :: [String] -> [String] -> Either ErrorMessage ()
+validateColumnNames _ [] = Right ()
+validateColumnNames col_names (c:cs) =
+  if c `elem` col_names
+    then validateColumnNames col_names cs
+  else
+    Left "One or multiple columns don't exist inside the table."
+
+stringToInt :: String -> Maybe Integer
+stringToInt str = readMaybe str :: Maybe Integer
+
+stringToBool :: String -> Maybe Bool
+stringToBool "True"  = Just True
+stringToBool "False" = Just False
+stringToBool _       = Nothing
+
+getValueFromMaybe :: Maybe a -> a
+getValueFromMaybe (Just maybeValue) = maybeValue
+
+getStringValues :: [Column] -> [String]
+getStringValues = map extractString
+  where
+    extractString :: Column -> String
+    extractString (Column str _) = str
+
+hasDuplicates :: [String] -> Either ErrorMessage ()
+hasDuplicates xs =
+  if length xs /= length (nub xs)
+    then Left "Column names cannot be the same"
+  else
+    Right ()
 
 updateDataFrame :: DataFrame -> [Column] -> [Value] -> String -> DataFrame
 updateDataFrame (DataFrame columns rows) updateColumns newValues condition =
@@ -177,6 +267,19 @@ instance FromJSON DataFrame where
     --Just df -> print df
     --Nothing -> putStrLn "Failed to parse JSON"
 
+--TODO:
+--executeStatement su UPDATE
+
+--VEIKIMO PRINCIPAS:
+--Gauna table, columns, values ir condition
+--Su loadFile gauna DataFrame is failo
+--[String] tipo values pakeicia i [Values] tipa
+--Iskviecia updateDataFrame funkcija ir gauna updatinta DataFrame
+--Pabaigoje iskviecia funkcija saveFile su updatintu DataFrame
+
+--executeStatement :: String -> [String] -> [String] -> String
+--executeStatement table columns values condition = ...
+
 -- execute SHOW TABLE table_name;
 executeStatement :: ParsedStatement -> Execution (Either ErrorMessage DataFrame)
 executeStatement (ShowTable table_name) = do
@@ -219,7 +322,6 @@ executeStatement (SelectStatement cols tables conditions) = do
           case result of
             Left err -> return $ Left err
             Right table -> loadTables' restNames (acc ++ [table])
-
 
     checkIfAll :: [String] -> Bool
     checkIfAll [n] =
@@ -352,3 +454,4 @@ executeStatement (SelectStatement cols tables conditions) = do
         if null (snd fun)
           then Right (DataFrame allCols allRows)
           else Right (DataFrame allCols [head allRows])
+
