@@ -34,6 +34,7 @@ data ParsedStatement
   | ShowTables
   | SelectStatement [String] [String] String
   | InsertStatement String [String] [[String]]
+  | DeleteStatement String String
   deriving (Show, Eq)
 
     -- Function to split the query at whitespaces outside quotes
@@ -96,6 +97,9 @@ parseStatement query =
       | map toLower command == "select" = case splitSelectStatement q of
         Left err -> Left err
         Right result -> Right result
+      | map toLower command == "delete" = case splitDeleteStatement q of
+        Left err -> Left err
+        Right result -> Right result
       | map toLower command == "insert" = case map toLower (head q) of
           "into" ->
             case identifyInsertValues (tail q) of
@@ -109,6 +113,27 @@ parseStatement query =
         (a, b) <- splitColumns [] q
         (names, conditions) <- distinguishTableNames b
         parseSelectStatement a names conditions
+
+    -- Parse delete statement
+    splitDeleteStatement :: [String] -> Either ErrorMessage ParsedStatement
+    splitDeleteStatement query = do
+      if null query || map toLower (head query) /= "from"
+        then Left "Invalid DELETE syntax: Missing 'FROM' keyword."
+        else do
+          let restWithoutFrom = tail query
+          if null (tail restWithoutFrom)
+            then do
+              Right (DeleteStatement (head restWithoutFrom) "")
+            else do
+              if (head (tail restWithoutFrom)) /= "where" || length (tail restWithoutFrom) < 2
+                then Left "Invalid DELETE syntax: Either Table Name Is Wrong Or Missing 'WHERE' keyword Or Conditions After It"
+                else do
+                  let (table, restWithoutTable) = span (\s -> map toLower s /= map toLower "where") restWithoutFrom
+                  let (conditions, _) = span (\s -> map toLower s /= map toLower "where") (tail restWithoutTable)
+                  if null table
+                    then Left "Invalid DELETE syntax."
+                    else do
+                      Right (DeleteStatement (unwords table) (unwords conditions))
 
     -- splits columns until finds from (if where or select - error)
     splitColumns :: [String] -> [String] -> Either ErrorMessage ([String], [String])
