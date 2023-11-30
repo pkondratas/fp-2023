@@ -124,34 +124,46 @@ parseStatement query =
         splitByComma str = filter (not . null) $ words $ map (\c -> if c == ',' then ' ' else c) str
 
     -- INSERT INTO table (cols) VALUES (vals), (vals), ...
-    identifyInsertValues :: [String] -> Either ErrorMessage ParsedStatement
+    identifyInsertValues :: [String] -> Either String ParsedStatement
     identifyInsertValues [] = Left "Specify table name and values."
     identifyInsertValues (table:rest) = do
       let (cols, restWithoutValues) = span (\s -> map toLower s /= map toLower "values") rest
       let valuesBlock = dropWhile (\s -> map toLower s == map toLower "values") restWithoutValues
       if null cols || null valuesBlock
         then do
-          Left "Invalid INSERT syntax."     
+          Left "Invalid INSERT syntax."
       else do
-        let columns = map (removeBrackets . cleanName . map toLower) cols
-        let cleanBlock = map cleanName valuesBlock
-        let groupedBlock = groupStrings cleanBlock
-        let nonEmpty = map removeBracketsFromList groupedBlock
-        let valuesLines = removeSpaces nonEmpty
-        if all (all (not . null)) valuesLines && all (not . null) columns
+        ()   <- validateSpaces cols      
+        str  <- removeBrackets (concat cols)
+        ()   <- checkFirstChar (head str)
+        ()   <- validateCommaSyntax str
+        if all (all (not . null)) (removeSpaces (map removeBracketsFromList (groupStrings (map cleanName valuesBlock)))) && all (not . null) (splitItemsByComma str)
           then do
-            Right (InsertStatement table columns valuesLines)
+            Right (InsertStatement table (splitItemsByComma str) (removeSpaces (map removeBracketsFromList (groupStrings (map cleanName valuesBlock)))))
         else
             Left "Invalid INSERT syntax: Empty strings in valuesLines or columns."
+
+
+    validateSpaces :: [String] -> Either String ()
+    validateSpaces cols = 
+        if words (changeCommasIntoSpaces (concat cols)) == words (changeCommasIntoSpaces (unwords cols)) 
+            then Right ()
+        else Left "Wrong syntax: comma missing in-between columns."
+
+    checkFirstChar :: Char -> Either String ()
+    checkFirstChar c = if c == ',' then Left "No columns specified before first comma" else Right ()
 
     removeSpaces :: [[String]] -> [[String]]
     removeSpaces = map (filter (/= " "))
 
-    removeBrackets :: String -> String
-    removeBrackets = filter (`notElem` ['(', ')', ',', '[', ']', '{', '}'])
+    removeBrackets :: String -> Either String String
+    removeBrackets cols =
+        case (head cols, last cols) of
+            ('(', ')') -> Right (init (tail cols))
+            _ -> Left "Wrong syntax: missing ( or ) surrounding columns."
 
     removeBracketsFromList :: [String] -> [String]
-    removeBracketsFromList = map removeBrackets
+    removeBracketsFromList = map (filter (`notElem` ['(', ')', ',', '[', ']', '{', '}']))
 
     -- Function to check if a string starts with '('
     startsWithBracket :: String -> Bool
@@ -164,13 +176,6 @@ parseStatement query =
     -- Function to group strings based on the bracket conditions
     groupStrings :: [String] -> [[String]]
     groupStrings = groupBy (\x y -> (not (startsWithBracket y)) && (not (endsWithBracket x)))
-
-    -- Check if the number of elements in the lists of values match the number of columns
-    checkValuesConsistency :: [String] -> [[String]] -> Either ErrorMessage ()
-    checkValuesConsistency columns valuesLines =
-      if all (\values -> length values == length columns) valuesLines
-        then Right ()
-      else Left "Number of elements in values lists does not match the number of columns."
 
     -- Clean the column or table name from potential extra characters
     cleanName :: String -> String

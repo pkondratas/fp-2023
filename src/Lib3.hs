@@ -24,12 +24,10 @@ import Data.Aeson hiding (Value)
 import Control.Applicative ((<|>))
 import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
-    ( ParsedStatement(SelectStatement, ShowTable, ShowTables),
+    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement),
       parseStatement,
       executeStatement,
       checkAll )
-import Control.Monad.Trans.Error (Error)
-import GHC.Windows (errCodeToIOError)
 import Text.Read (readMaybe)
 
 type TableName = String
@@ -70,16 +68,16 @@ executeSql sql =
       case executeStatement (SelectStatement cols tables conditions) of
         Left err -> return $ Left err
         Right df -> return $ Right df
-    -- Right (InsertData table_name cols values) -> do
-    --   result <- loadFile table_name
-    --   case result of 
-    --     Left err -> return $ Left err
-    --     Right (DataFrame cls rws) -> do
-    --       case parseRows cls cols values of
-    --         Left err -> return $ Left err
-    --         Right newRows -> do 
-    --           (_, df) <- saveFile (table_name, DataFrame cls (rws ++ newRows))
-    --           return $ Right df
+    Right (InsertStatement table_name cols values) -> do
+      result <- loadFile table_name
+      case result of 
+        Left err -> return $ Left err
+        Right (DataFrame cls rws) -> do
+          case parseRows cls cols values of
+            Left err -> return $ Left err
+            Right newRows -> do 
+              (_, df) <- saveFile (table_name, DataFrame cls (rws ++ newRows))
+              return $ Right df
 
 parseRows :: [Column] -> [String] -> [[String]] -> Either ErrorMessage [Row]
 parseRows table_cols cols values = do
@@ -89,10 +87,7 @@ parseRows table_cols cols values = do
 createRows :: [Column] -> [String] -> [[String]] -> [Row]
 createRows _ _ [] = []
 createRows table_cols cols (v:vs) =
-   createRow table_cols cols v : createRows table_cols cols vs
-
--- createRow :: [Column] -> [String] -> [String] -> Row
--- createRow ((Column name dtype):tcls) cols values = createValuesForRow name dtype cols values
+  createRow table_cols cols v : createRows table_cols cols vs
 
 createRow :: [Column] -> [String] -> [String] -> [Value]
 createRow [] _ _ = []
@@ -112,9 +107,9 @@ createValueForRow name dtype (c:cs) (v:vs) =
 
 validateInput :: [Column] -> [String] -> [[String]] -> Either ErrorMessage ()
 validateInput table_cols cols values = do
-    () <- hasDuplicates (getStringValues table_cols)
     () <- validateColumnNames (getStringValues table_cols) cols
     () <- validateNewValues table_cols cols values
+    () <- hasDuplicates cols
     return ()
 
 validateNewValues :: [Column] -> [String] -> [[String]] -> Either ErrorMessage ()
@@ -180,8 +175,6 @@ hasDuplicates xs =
     then Left "Column names cannot be the same"
   else
     Right ()
-
--- json parsinimas
 
 updateDataFrame :: DataFrame -> [Column] -> [Value] -> String -> DataFrame
 updateDataFrame (DataFrame columns rows) updateColumns newValues condition =
@@ -276,3 +269,8 @@ instance FromJSON DataFrame where
   --case parsedData of
     --Just df -> print df
     --Nothing -> putStrLn "Failed to parse JSON"
+
+
+
+
+-- form Lib2 changes
