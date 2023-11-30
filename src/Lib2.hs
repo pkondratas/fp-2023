@@ -36,6 +36,7 @@ data ParsedStatement
   | SelectStatement [String] [String] String
   | InsertStatement String [String] [[String]]
   | DeleteStatement String String
+  | UpdateStatement [String] [String] [String] String
   deriving (Show, Eq)
 
 -- Parses user input into an entity representing a parsed
