@@ -179,7 +179,7 @@ parseStatement query =
             then do
               Right (DeleteStatement (head restWithoutFrom) "")
             else do
-              if (head (tail restWithoutFrom)) /= "where" || length (tail restWithoutFrom) < 2
+              if map toLower (head (tail restWithoutFrom)) /= "where" || length (tail restWithoutFrom) < 2
                 then Left "Invalid DELETE syntax: Either Table Name Is Wrong Or Missing 'WHERE' keyword Or Conditions After It"
                 else do
                   let (table, restWithoutTable) = span (\s -> map toLower s /= map toLower "where") restWithoutFrom
