@@ -75,6 +75,37 @@ executeSql sql =
             Right newRows -> do 
               (_, df) <- saveFile (table_name, DataFrame cls (rws ++ newRows))
               return $ Right df
+    Right (DeleteStatement tableName conditions) -> do
+      loadResult <- loadFile tableName
+      case loadResult of
+            Left errorMsg -> return $ Left errorMsg
+            Right df -> do
+                if null conditions
+                    then deleteWithoutWhere df tableName
+                    else saveDeletedDataFrame (deleteWithWhere df conditions) tableName
+
+deleteWithoutWhere :: DataFrame -> String -> Execution (Either ErrorMessage DataFrame)
+deleteWithoutWhere originalDataFrame tableName = do
+    let deletedDataFrame = deleteAllRows originalDataFrame
+    saveFile (tableName, deletedDataFrame)
+    return $ Right deletedDataFrame
+
+deleteAllRows :: DataFrame -> DataFrame
+deleteAllRows (DataFrame columns _) = DataFrame columns []
+
+deleteWithWhere :: DataFrame -> String -> DataFrame
+deleteWithWhere (DataFrame columns rows) conditions =
+  let keepRow row =
+        case checkAll conditions (DataFrame columns [row]) row of
+          Right True  -> False
+          Right False -> True
+      updatedRows = filter keepRow rows
+  in DataFrame columns updatedRows
+
+saveDeletedDataFrame :: DataFrame -> String -> Execution (Either ErrorMessage DataFrame)
+saveDeletedDataFrame df tableName = do
+  saveFile (tableName, df)
+  return $ Right df
 
 parseRows :: [Column] -> [String] -> [[String]] -> Either ErrorMessage [Row]
 parseRows table_cols cols values = do
