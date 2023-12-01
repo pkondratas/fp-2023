@@ -36,7 +36,7 @@ data ParsedStatement
   | SelectStatement [String] [String] String
   | InsertStatement String [String] [[String]]
   | DeleteStatement String String
-  | UpdateStatement [String] [String] [String] String
+  | UpdateStatement String [String] [String] String
   deriving (Show, Eq)
 
 -- Parses user input into an entity representing a parsed
@@ -147,13 +147,14 @@ parseStatement query =
             else do
               let (updatePairs, conditions) = break (== "where") (tail restAfterUpdate)
               let (valuesFinal, updatedColumns) = parsePairs updatePairs
-              let values = filter (not . null) (map cleanName valuesFinal)
-              let cols = filter (not . null) (map cleanName updatedColumns)
+              let cols = filter (not . null) (map cleanName valuesFinal)
+              let values = filter (not . null) (map cleanName updatedColumns)
               if length values /= length updatedColumns 
                 then Left "Invalid Syntax. Value count doesnt match column count" 
                 else do
                   let combinedConditions = unwords (tail conditions)
-                  Right (UpdateStatement tableName cols values (init combinedConditions))
+                  let table = head tableName
+                  Right (UpdateStatement table cols values (init combinedConditions))
           else do
             traceShow (map (map toLower) queryTokens) $ return ()
             Left "Invalid UPDATE query syntax."

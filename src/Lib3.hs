@@ -26,7 +26,7 @@ import Control.Applicative ((<|>))
 import Text.Read (readMaybe)
 import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
-    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement),
+    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement, UpdateStatement),
       parseStatement,
       checkAll,
       applyConditions )
@@ -75,6 +75,7 @@ executeSql sql =
             Right newRows -> do 
               (_, df) <- saveFile (table_name, DataFrame cls (rws ++ newRows))
               return $ Right df
+    Right (UpdateStatement table columns values condition) -> executeStatement (UpdateStatement table columns values condition)
 
 parseRows :: [Column] -> [String] -> [[String]] -> Either ErrorMessage [Row]
 parseRows table_cols cols values = do
@@ -173,31 +174,6 @@ hasDuplicates xs =
   else
     Right ()
 
-updateDataFrame :: DataFrame -> [Column] -> [Value] -> String -> DataFrame
-updateDataFrame (DataFrame columns rows) updateColumns newValues condition =
-  let updateRow row =
-        case checkAll condition (DataFrame columns [row]) row of
-          Right True  -> updateRowValues row
-          _           -> row
-
-      updateRowValues row =
-        let updatedRow = zipWith updateValue columns row
-        in updatedRow
-
-      updateValue (Column colName colType) oldValue =
-        case lookup colName (zipWithColumnAndValue updateColumns newValues) of
-          Just newValue -> newValue
-          Nothing       -> oldValue
-
-      zipWithColumnAndValue :: [Column] -> [Value] -> [(String, Value)]
-      zipWithColumnAndValue cols vals =
-        map (\(Column colName _, value) -> (colName, value)) (zip cols vals)
-
-      updatedRows = map updateRow rows
-  in DataFrame columns updatedRows
-
-
-
 columnTypeToJson :: ColumnType -> String
 columnTypeToJson IntegerType = "integer"
 columnTypeToJson StringType  = "string"
@@ -266,19 +242,6 @@ instance FromJSON DataFrame where
   --case parsedData of
     --Just df -> print df
     --Nothing -> putStrLn "Failed to parse JSON"
-
---TODO:
---executeStatement su UPDATE
-
---VEIKIMO PRINCIPAS:
---Gauna table, columns, values ir condition
---Su loadFile gauna DataFrame is failo
---[String] tipo values pakeicia i [Values] tipa
---Iskviecia updateDataFrame funkcija ir gauna updatinta DataFrame
---Pabaigoje iskviecia funkcija saveFile su updatintu DataFrame
-
---executeStatement :: String -> [String] -> [String] -> String
---executeStatement table columns values condition = ...
 
 -- execute SHOW TABLE table_name;
 executeStatement :: ParsedStatement -> Execution (Either ErrorMessage DataFrame)
@@ -455,3 +418,70 @@ executeStatement (SelectStatement cols tables conditions) = do
           then Right (DataFrame allCols allRows)
           else Right (DataFrame allCols [head allRows])
 
+executeStatement (UpdateStatement table columns values condition) = do
+  result <- loadFile table
+  case result of
+    Left err -> return $ Left err
+    Right (DataFrame dfCol dfRows) -> do
+      case parseColumns columns dfCol of
+        Left err -> return $ Left err
+        Right colsToUpdate -> do
+          case parseValues values colsToUpdate of
+            Left err -> return $ Left err
+            Right parsedValues -> do
+              let updatedDF = updateDataFrame (DataFrame dfCol dfRows) colsToUpdate parsedValues condition
+              (_, saveResult) <- saveFile (table, updatedDF)
+              return $ Right saveResult
+  where
+    parseColumns :: [String] -> [Column] -> Either ErrorMessage [Column]
+    parseColumns colStrings dfColumns =
+      if allIn colStrings (map (\(Column name _) -> name) dfColumns)
+        then Right (getColumns colStrings dfColumns)
+        else Left "Incorrect columns"
+      where
+        allIn :: Eq a => [a] -> [a] -> Bool
+        allIn xs ys = all (`elem` ys) xs
+
+        getColumns :: [String] -> [Column] -> [Column]
+        getColumns cs dc =
+          filter (\(Column name _) -> name `elem` cs) dc
+
+    parseValues :: [String] -> [Column] -> Either ErrorMessage [Value]
+    parseValues valueStrings cols
+      | length valueStrings /= length cols = Left "Incorrect number of values"
+      | otherwise = sequenceA $ zipWith parseValue valueStrings cols
+      where
+        parseValue :: String -> Column -> Either ErrorMessage Value
+        parseValue valueString (Column _ colType) =
+          case colType of
+            IntegerType -> case reads valueString of
+              [(intValue, "")] -> Right (IntegerValue intValue)
+              _ -> Left  "Failed to parse Integer value"
+            StringType -> Right (StringValue valueString)
+            BoolType -> case reads (map toLower valueString) of
+              [(boolValue, "")] -> Right (BoolValue boolValue)
+              _ -> Left "Failed to parse Bool value"
+
+
+updateDataFrame :: DataFrame -> [Column] -> [Value] -> String -> DataFrame
+updateDataFrame (DataFrame columns rows) updateColumns newValues condition =
+  let updateRow row =
+        case checkAll condition (DataFrame columns [row]) row of
+          Right True  -> updateRowValues row
+          _           -> row
+
+      updateRowValues row =
+        let updatedRow = zipWith updateValue columns row
+        in updatedRow
+
+      updateValue (Column colName colType) oldValue =
+        case lookup colName (zipWithColumnAndValue updateColumns newValues) of
+          Just newValue -> newValue
+          Nothing       -> oldValue
+
+      zipWithColumnAndValue :: [Column] -> [Value] -> [(String, Value)]
+      zipWithColumnAndValue cols vals =
+        map (\(Column colName _, value) -> (colName, value)) (zip cols vals)
+
+      updatedRows = map updateRow rows
+  in DataFrame columns updatedRows
