@@ -519,7 +519,7 @@ applyConditions conditions [tableName] [table] = do
       (DataFrame columns rows) ->
         if null conditions
           then return (DataFrame (renameColumns tableName columns) rows)
-          else return (DataFrame (renameColumns tableName columns) (filterRows conditions table rows))
+          else return (DataFrame (renameColumns tableName columns) (filterRows conditions (DataFrame (renameColumns tableName columns) rows) rows))
 
 --Jeigu yra daugiau
 applyConditions conditions tableNames tables = do
