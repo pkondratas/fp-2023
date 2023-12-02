@@ -179,6 +179,18 @@ main = hspec $ do
                                                                                             [IntegerValue 1, StringValue "emilja"],
                                                                                             [IntegerValue 1, StringValue "greta"]]) 
       `shouldBe` "{ \"columns\": [{ \"name\": \"id\", \"type\": \"integer\" }, { \"name\": \"name\", \"type\": \"string\" }], \"rows\": [[{\"IntegerValue\":1}, {\"StringValue\":\"domas\"}], [{\"IntegerValue\":1}, {\"StringValue\":\"emilja\"}], [{\"IntegerValue\":1}, {\"StringValue\":\"greta\"}]] }" 
+
+    it "returns a DataFrame with updated values" $ do
+      result <- runExecuteIO $ Lib3.executeSql "UPDATE employees SET name = 'testName', surname = 'testSurname' WHERE id = 1;"
+      result `shouldBe` Right (DataFrame [Column "id" IntegerType, Column "name" StringType, Column "surname" StringType][[IntegerValue 1, StringValue "testName", StringValue "testSurname"],
+                                                                                                                          [IntegerValue 2, StringValue "Ed", StringValue "Dl"]])
+    it "returns a DataFrame with all rows updated" $ do
+      result <- runExecuteIO $ Lib3.executeSql "UPDATE employees SET name = 'testName', surname = 'testSurname';"
+      result `shouldBe` Right (DataFrame [Column "id" IntegerType, Column "name" StringType, Column "surname" StringType][[IntegerValue 1, StringValue "testName", StringValue "testSurname"],
+                                                                                                                          [IntegerValue 2, StringValue "testName", StringValue "testSurname"]])
+    it "returns an error message" $ do
+      result <- runExecuteIO $ Lib3.executeSql "UPDATE employees SET name = 'testName' WHERE age = 20;"
+      result `shouldSatisfy` isLeft
     
     it "Serializes a DataFrame to json" $ do
       Lib3.dataFrameToJson (DataFrame[Column "id" IntegerType, Column "name" StringType, Column "surname" StringType][ [IntegerValue 1, StringValue "Vi", StringValue "Po"],
