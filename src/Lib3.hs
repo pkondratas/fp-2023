@@ -24,6 +24,7 @@ import Data.Time ( UTCTime )
 import Data.Aeson hiding (Value)
 import Control.Applicative ((<|>))
 import Text.Read (readMaybe)
+import Data.Either (partitionEithers)
 import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
     ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement, UpdateStatement, DeleteStatement),
@@ -461,8 +462,11 @@ executeStatement (UpdateStatement table columns values condition) = do
             Left err -> return $ Left err
             Right parsedValues -> do
               let updatedDF = updateDataFrame (DataFrame dfCol dfRows) colsToUpdate parsedValues condition
-              (_, saveResult) <- saveFile (table, updatedDF)
-              return $ Right saveResult
+              case updatedDF of 
+                Left err -> return $ Left err
+                Right df -> do
+                  (_, saveResult) <- saveFile (table, df)
+                  return $ Right saveResult
   where
     parseColumns :: [String] -> [Column] -> Either ErrorMessage [Column]
     parseColumns colStrings dfColumns =
@@ -494,25 +498,32 @@ executeStatement (UpdateStatement table columns values condition) = do
               _ -> Left "Failed to parse Bool value"
 
 
-updateDataFrame :: DataFrame -> [Column] -> [Value] -> String -> DataFrame
-updateDataFrame (DataFrame columns rows) updateColumns newValues condition =
-  let updateRow row =
-        case checkAll condition (DataFrame columns [row]) row of
-          Right True  -> updateRowValues row
-          _           -> row
+updateDataFrame :: DataFrame -> [Column] -> [Value] -> String -> Either ErrorMessage DataFrame
+updateDataFrame (DataFrame columns rows) updateColumns newValues condition = do
+  let result = map updateRow rows
+  let (errors, updatedRows) = partitionEithers result
+  if null errors
+    then Right $ DataFrame columns updatedRows
+    else Left "Incorrect condition"
+  where
+    updateRow :: Row -> Either ErrorMessage Row
+    updateRow row =
+      case checkAll condition (DataFrame columns [row]) row of
+        Right True  -> Right $ updateRowValues row
+        Right False -> Right row
+        Left err -> Left err
 
-      updateRowValues row =
-        let updatedRow = zipWith updateValue columns row
-        in updatedRow
+    updateRowValues :: Row -> Row
+    updateRowValues row =
+      let updatedRow = zipWith updateValue columns row
+      in updatedRow
 
-      updateValue (Column colName colType) oldValue =
-        case lookup colName (zipWithColumnAndValue updateColumns newValues) of
-          Just newValue -> newValue
-          Nothing       -> oldValue
+    updateValue :: Column -> Value -> Value
+    updateValue (Column colName colType) oldValue =
+      case lookup colName (zipWithColumnAndValue updateColumns newValues) of
+        Just newValue -> newValue
+        Nothing       -> oldValue
 
-      zipWithColumnAndValue :: [Column] -> [Value] -> [(String, Value)]
-      zipWithColumnAndValue cols vals =
-        map (\(Column colName _, value) -> (colName, value)) (zip cols vals)
-
-      updatedRows = map updateRow rows
-  in DataFrame columns updatedRows
+    zipWithColumnAndValue :: [Column] -> [Value] -> [(String, Value)]
+    zipWithColumnAndValue cols vals =
+      map (\(Column colName _, value) -> (colName, value)) (zip cols vals)
