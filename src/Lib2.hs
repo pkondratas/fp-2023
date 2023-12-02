@@ -587,37 +587,47 @@ filterRows conditions table rows =
     [row | row <- rows, checkAll conditions table row == Right True]
 
 checkCondition :: String -> DataFrame -> Row -> Either ErrorMessage Bool
-checkCondition condition table row = executeCondition (getFirstThreeWords condition)
+checkCondition condition table row = executeCondition $ getFirstThreeWords condition
   where
-    getFirstThreeWords :: String -> (String, String, String)
+    getFirstThreeWords :: String -> Either ErrorMessage (String, String, String)
     getFirstThreeWords input =
       case words input of
-        [operand1, operator, operand2] -> (operand1, operator, operand2)
-        _ -> error "Incorrect condition syntax"
+        [operand1, operator, operand2] -> Right (operand1, operator, operand2)
+        _ -> Left "Incorrect condition syntax"
 
     -- Returns the operation value based on the operator provided in the condition string
-    executeCondition :: (String, String, String) -> Either ErrorMessage Bool
-    executeCondition (operand1,  operator,  operand2 ) =
-      case operator of
-        "=" -> Right (getOperandValue operand1 == getOperandValue operand2)
-        "<>" -> Right (getOperandValue operand1 /= getOperandValue operand2)
-        "!=" -> Right (getOperandValue operand1 /= getOperandValue operand2)
-        "<" -> Right (getOperandValue operand1 < getOperandValue operand2)
-        ">" -> Right (getOperandValue operand1 > getOperandValue operand2)
-        "<=" -> Right (getOperandValue operand1 <= getOperandValue operand2)
-        ">=" -> Right (getOperandValue operand1 >= getOperandValue operand2)
-        _ -> error "Incorrect condition syntax"
+    executeCondition :: Either ErrorMessage (String, String, String) -> Either ErrorMessage Bool
+    executeCondition result = do
+      case result of
+        Left err -> Left err
+        Right (op1, operator, op2) -> do
+          case getOperandValue op1 of
+            Left err -> Left err
+            Right operand1 -> do
+              case getOperandValue op2 of
+                Left err -> Left err
+                Right operand2 -> do
+                  case operator of
+                    "=" -> Right (operand1 == operand2)
+                    "<>" -> Right (operand1 /= operand2)
+                    "!=" -> Right (operand1 /= operand2)
+                    "<" -> Right (operand1 < operand2)
+                    ">" -> Right (operand1 > operand2)
+                    "<=" -> Right (operand1 <= operand2)
+                    ">=" -> Right (operand1 >= operand2)
+                    _ -> Left "Incorrect condition syntax"
+        
 
     -- Returns an operand value based on the operand string (either a regular integer or a column value)
-    getOperandValue :: String -> Integer
+    getOperandValue :: String -> Either ErrorMessage Integer
     getOperandValue opName =
       if isInteger opName then
         case reads opName of
-          [(intValue, _)] -> intValue
+          [(intValue, _)] -> Right intValue
       else
         case getValueFromTable opName row of
-          IntegerValue intValue -> intValue
-          _ -> error "Column does not exist in this row"
+          IntegerValue intValue -> Right intValue
+          _ -> Left "Column does not exist in this row"
 
     -- Check if operand is an integer      
     isInteger :: String -> Bool
