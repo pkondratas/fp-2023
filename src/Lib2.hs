@@ -136,8 +136,7 @@ parseStatement query =
     splitUpdateStatement :: [String] -> Either ErrorMessage ParsedStatement
     splitUpdateStatement queryTokens =
       -- Check if the query contains the necessary components
-      if elemIndex "set" (map (map toLower) queryTokens) /= Nothing &&
-        elemIndex "where" (map (map toLower) queryTokens) /= Nothing
+      if elemIndex "set" (map (map toLower) queryTokens) /= Nothing
         then do
           -- Extract and process the relevant parts of the query
           let lowershit = splitByWord "set" $ unwords queryTokens
@@ -147,16 +146,27 @@ parseStatement query =
             then Left "Invalid Table Name." 
             else do
               let whereSplit = splitByWord "where" restAfterUpdate
-              let updatePairs = words (head whereSplit)
-              let conditions = unwords $ words $ whereSplit !! 1
-              let (valuesFinal, updatedColumns) = parsePairs updatePairs
-              let cols = filter (not . null) (map cleanName valuesFinal)
-              let values = filter (not . null) (map cleanName updatedColumns)
-              if length values /= length updatedColumns 
-                then Left "Invalid Syntax. Value count doesnt match column count" 
-                else do
-                  let combinedConditions = conditions
-                  Right (UpdateStatement tableName cols values (init combinedConditions))
+              case whereSplit of
+                [pairs] -> do
+                  let updatePairs = words pairs
+                  let (valuesFinal, updatedColumns) = parsePairs updatePairs
+                  let cols = filter (not . null) (map cleanName valuesFinal)
+                  let values = filter (not . null) (map cleanName updatedColumns)
+                  if length values /= length updatedColumns
+                    then Left "Invalid Syntax. Value count doesnt match column count" 
+                    else do
+                      Right (UpdateStatement tableName cols values "")
+                _ -> do
+                  let updatePairs = words (head whereSplit)
+                  let conditions = unwords $ words $ whereSplit !! 1
+                  let (valuesFinal, updatedColumns) = parsePairs updatePairs
+                  let cols = filter (not . null) (map cleanName valuesFinal)
+                  let values = filter (not . null) (map cleanName updatedColumns)
+                  if length values /= length updatedColumns 
+                    then Left "Invalid Syntax. Value count doesnt match column count" 
+                    else do
+                      let combinedConditions = conditions
+                      Right (UpdateStatement tableName cols values (init combinedConditions))
           else do
             traceShow (map (map toLower) queryTokens) $ return ()
             Left "Invalid UPDATE query syntax."
@@ -603,10 +613,12 @@ checkCondition condition table row = executeCondition $ getFirstThreeWords condi
         Right (op1, operator, op2) -> do
           case getOperandValue op1 of
             Left err -> Left err
-            Right operand1 -> do
+            Right NullValue -> Right False
+            Right (IntegerValue operand1) -> do
               case getOperandValue op2 of
                 Left err -> Left err
-                Right operand2 -> do
+                Right NullValue -> Right False
+                Right (IntegerValue operand2) -> do
                   case operator of
                     "=" -> Right (operand1 == operand2)
                     "<>" -> Right (operand1 /= operand2)
@@ -616,17 +628,17 @@ checkCondition condition table row = executeCondition $ getFirstThreeWords condi
                     "<=" -> Right (operand1 <= operand2)
                     ">=" -> Right (operand1 >= operand2)
                     _ -> Left "Incorrect condition syntax"
-        
 
     -- Returns an operand value based on the operand string (either a regular integer or a column value)
-    getOperandValue :: String -> Either ErrorMessage Integer
+    getOperandValue :: String -> Either ErrorMessage Value
     getOperandValue opName =
       if isInteger opName then
         case reads opName of
-          [(intValue, _)] -> Right intValue
+          [(intValue, _)] -> Right (IntegerValue intValue)
       else
         case getValueFromTable opName row of
-          IntegerValue intValue -> Right intValue
+          Right (IntegerValue intValue) -> Right (IntegerValue intValue)
+          Right NullValue -> Right NullValue
           _ -> Left "Column does not exist in this row"
 
     -- Check if operand is an integer      
@@ -636,7 +648,7 @@ checkCondition condition table row = executeCondition $ getFirstThreeWords condi
       _ -> False
 
     -- Get the value from the DataFrame row by column name
-    getValueFromTable :: String -> Row -> Value
+    getValueFromTable :: String -> Row -> Either ErrorMessage Value
     getValueFromTable columnName currentRow =
       let
         toMaybeDataFrame :: DataFrame -> Maybe DataFrame
@@ -648,8 +660,16 @@ checkCondition condition table row = executeCondition $ getFirstThreeWords condi
         maybeColumnIndex = toMaybeDataFrame table >>= \(DataFrame columns _) ->
           elemIndex columnName (map (\(Column name _) -> name) columns)
 
+        maybeValue index =
+          case index of
+            Just i -> do
+              case currentRow `atMay` i of 
+                Just val -> Right val
+                Nothing -> Left "Column does not exist"
+            Nothing -> Left "Column does not exist"
+
         -- Get value from the row
-        value = maybe NullValue (\index -> fromMaybe NullValue (currentRow `atMay` index)) maybeColumnIndex
+        value = maybeValue maybeColumnIndex
       in
         value
 
