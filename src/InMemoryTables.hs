@@ -5,6 +5,7 @@ module InMemoryTables
     tableLongStrings,
     tableWithNulls,
     database,
+    people,
     TableName,
   )
 where
@@ -22,6 +23,17 @@ tableEmployees =
         [IntegerValue 2, StringValue "Ed", StringValue "Dl"]
       ]
   )
+tablePeople :: (TableName, DataFrame)
+tablePeople =
+  ( "people",
+    DataFrame
+      [Column "id" IntegerType, Column "name" StringType]
+      [ [IntegerValue 1, StringValue "domas"],
+        [IntegerValue 2, StringValue "petras"],
+        [IntegerValue 1, StringValue "emilja"],
+        [IntegerValue 1, StringValue "greta"]
+      ]
+  ) 
 
 tableInvalid1 :: (TableName, DataFrame)
 tableInvalid1 =
@@ -80,4 +92,4 @@ tableWithNulls =
   )
 
 database :: [(TableName, DataFrame)]
-database = [tableEmployees, tableInvalid1, tableInvalid2, tableLongStrings, tableWithNulls]
+database = [tableEmployees, tableInvalid1, tableInvalid2, tableLongStrings, tableWithNulls, people]
