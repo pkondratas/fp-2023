@@ -140,21 +140,23 @@ parseStatement query =
         elemIndex "where" (map (map toLower) queryTokens) /= Nothing
         then do
           -- Extract and process the relevant parts of the query
-          let lowershit = map (map toLower) queryTokens
-          let (tableName, restAfterUpdate) = break (== "set") lowershit
-          if length tableName /= 1
+          let lowershit = splitByWord "set" $ unwords queryTokens
+          let tableName = head $ words $ head lowershit
+          let restAfterUpdate = unwords $ words $ lowershit !! 1
+          if null tableName
             then Left "Invalid Table Name." 
             else do
-              let (updatePairs, conditions) = break (== "where") (tail restAfterUpdate)
+              let whereSplit = splitByWord "where" restAfterUpdate
+              let updatePairs = words (head whereSplit)
+              let conditions = unwords $ words $ whereSplit !! 1
               let (valuesFinal, updatedColumns) = parsePairs updatePairs
               let cols = filter (not . null) (map cleanName valuesFinal)
               let values = filter (not . null) (map cleanName updatedColumns)
               if length values /= length updatedColumns 
                 then Left "Invalid Syntax. Value count doesnt match column count" 
                 else do
-                  let combinedConditions = unwords (tail conditions)
-                  let table = head tableName
-                  Right (UpdateStatement table cols values (init combinedConditions))
+                  let combinedConditions = conditions
+                  Right (UpdateStatement tableName cols values (init combinedConditions))
           else do
             traceShow (map (map toLower) queryTokens) $ return ()
             Left "Invalid UPDATE query syntax."
@@ -222,7 +224,6 @@ parseStatement query =
             Right (InsertStatement table (splitItemsByComma str) (removeSpaces (map removeBracketsFromList (groupStrings (map cleanName valuesBlock)))))
         else
             Left "Invalid INSERT syntax: Empty strings in valuesLines or columns."
-
 
     validateSpaces :: [String] -> Either String ()
     validateSpaces cols = 
