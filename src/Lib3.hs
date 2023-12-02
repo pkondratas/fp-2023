@@ -12,7 +12,8 @@ module Lib3
   ( executeSql,
     Execution,
     ExecutionAlgebra(..),
-    dataFrameToJson
+    dataFrameToJson,
+    jsonParser
   )
 where
 
@@ -22,6 +23,9 @@ import Control.Monad.Free (Free (..), liftF)
 import DataFrame (DataFrame)
 import Data.Time ( UTCTime )
 import Data.Aeson hiding (Value)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.ByteString.Lazy.Char8 as BSL
 import Control.Applicative ((<|>))
 import Text.Read (readMaybe)
 import Data.Either (partitionEithers)
@@ -266,6 +270,9 @@ instance FromJSON DataFrame where
     rows <- v.: "rows"
     return $ DataFrame columns rows
   parseJSON _ = fail "Invalid DataFrame"
+
+jsonParser :: String -> Maybe DataFrame
+jsonParser jsonData = decode (BSL.fromStrict $ TE.encodeUtf8 $ T.pack jsonData)
 
 --main :: IO ()
 --main = do
