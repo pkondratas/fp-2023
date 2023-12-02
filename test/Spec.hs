@@ -206,4 +206,12 @@ main = hspec $ do
       `shouldBe` "{ \"columns\": [], \"rows\": [] }"
 
     it "Parses Json into a DataFrame" $ do
-      Lib3.jsonParser ("{ \"columns\": [], \"rows\": [] }") `shouldBe` Just(DataFrame[][])                                                                                             
+      Lib3.jsonParser ("{ \"columns\": [], \"rows\": [] }") `shouldBe` Just(DataFrame[][])  
+
+    it "Parses Json into a DataFrame" $ do
+      Lib3.jsonParser ("{ \"columns\": [{ \"name\": \"id\", \"type\": \"integer\" }, { \"name\": \"name\", \"type\": \"string\" }, { \"name\": \"surname\", \"type\": \"string\" }], \"rows\": [] }")
+      `shouldBe` Just(DataFrame[Column "id" IntegerType, Column "name" StringType, Column "surname" StringType][]) 
+    it "Parses Json into a DataFrame" $ do
+      Lib3.jsonParser  ("{ \"columns\": [{ \"name\": \"id\", \"type\": \"integer\" }, { \"name\": \"name\", \"type\": \"string\" }, { \"name\": \"surname\", \"type\": \"string\" }], \"rows\": [[{\"IntegerValue\":1}, {\"StringValue\":\"Vi\"}, {\"StringValue\":\"Po\"}], [{\"IntegerValue\":2}, {\"StringValue\":\"Ed\"}, {\"StringValue\":\"Dl\"}]] }")
+      `shouldBe` Just (DataFrame[Column "id" IntegerType, Column "name" StringType, Column "surname" StringType][ [IntegerValue 1, StringValue "Vi", StringValue "Po"],
+                                                                                                                       [IntegerValue 2, StringValue "Ed", StringValue "Dl"]])                                                                                       

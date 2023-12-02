@@ -84,11 +84,15 @@ executeSql sql =
     Right (DeleteStatement tableName conditions) -> do
       loadResult <- loadFile tableName
       case loadResult of
-            Left errorMsg -> return $ Left errorMsg
-            Right df -> do
-                if null conditions
-                    then deleteWithoutWhere df tableName
-                    else saveDeletedDataFrame (deleteWithWhere df conditions) tableName
+        Left errorMsg -> return $ Left errorMsg
+        Right df -> do
+          if null conditions
+            then deleteWithoutWhere df tableName
+            else do
+              let result = deleteWithWhere df conditions
+              case result of
+                Left errorMsg -> return $ Left errorMsg
+                Right deletedData -> saveDeletedDataFrame deletedData tableName
 
 deleteWithoutWhere :: DataFrame -> String -> Execution (Either ErrorMessage DataFrame)
 deleteWithoutWhere originalDataFrame tableName = do
@@ -99,14 +103,17 @@ deleteWithoutWhere originalDataFrame tableName = do
 deleteAllRows :: DataFrame -> DataFrame
 deleteAllRows (DataFrame columns _) = DataFrame columns []
 
-deleteWithWhere :: DataFrame -> String -> DataFrame
+deleteWithWhere :: DataFrame -> String -> Either String DataFrame
 deleteWithWhere (DataFrame columns rows) conditions =
   let keepRow row =
         case checkAll conditions (DataFrame columns [row]) row of
           Right True  -> False
           Right False -> True
+          Left err    -> error err 
       updatedRows = filter keepRow rows
-  in DataFrame columns updatedRows
+  in case sequence (map (checkAll conditions (DataFrame columns rows)) rows) of
+    Right _ -> Right (DataFrame columns updatedRows)
+    Left err -> Left ("deletion failed: " ++ err)
 
 saveDeletedDataFrame :: DataFrame -> String -> Execution (Either ErrorMessage DataFrame)
 saveDeletedDataFrame df tableName = do
