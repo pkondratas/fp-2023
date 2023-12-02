@@ -19,11 +19,14 @@ where
 import Data.Char
 import Data.List ( intercalate, elemIndex, isPrefixOf, nub )
 import Control.Monad.Free (Free (..), liftF)
+import Data.Time.Clock
+import Data.Time.Format
 import DataFrame (DataFrame)
 import Data.Time ( UTCTime )
 import Data.Aeson hiding (Value)
 import Control.Applicative ((<|>))
 import Text.Read (readMaybe)
+import Data.Either (partitionEithers)
 import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
     ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement, UpdateStatement, DeleteStatement),
@@ -326,12 +329,17 @@ executeStatement (SelectStatement cols tables conditions) = do
     validateColumns :: [String] -> [Column] -> [String] -> Bool
     validateColumns columns c [] = True
     validateColumns columns c (n:ns) =
-      (elem n columns || checkIfSumOrMin n c) && validateColumns columns c ns
+      (elem n columns || checkIfSumOrMin n c || checkIfNow n) && validateColumns columns c ns
 
     checkIfSumOrMin :: String -> [Column] -> Bool
     checkIfSumOrMin str columns
         | ("sum(" `isPrefixOf` (map toLower str) || "min(" `isPrefixOf`map toLower str) && last str == ')' =
             checkAgainColumn (drop 4 (init str)) columns
+        | otherwise = False
+
+    checkIfNow :: String -> Bool
+    checkIfNow str
+        | "now(" `isPrefixOf` (map toLower str) && last str == ')' = True
         | otherwise = False
 
         -- Define a sample function to check the column
@@ -368,7 +376,10 @@ executeStatement (SelectStatement cols tables conditions) = do
                         values -> Right (foldr1 min values)
                 Nothing -> Left "Column not found in the DataFrame."
 
-        -- Calculate the sum of values in a specified column of a DataFrame
+        getTime :: Either ErrorMessage (Free ExecutionAlgebra UTCTime) 
+        getTime = Right $ liftF $ GetTime id
+        
+                -- Calculate the sum of values in a specified column of a DataFrame
         sum_n :: DataFrame -> String -> Either ErrorMessage Integer
         sum_n (DataFrame columns rows) columnName =
             case findColumnIndex columnName columns of
@@ -417,6 +428,11 @@ executeStatement (SelectStatement cols tables conditions) = do
                   case minim (DataFrame columns rows) (snd t) of
                     Left err -> row
                     Right rez -> row ++ [IntegerValue rez]
+              else if map toLower (fst t) == "now"
+                then
+                  case getTime of
+                    Left err -> Left err
+                    Right rez -> row ++ [StringValue rez]
               else
                 case sum_n (DataFrame columns rows) (snd t) of
                   Left err -> row
@@ -435,6 +451,9 @@ executeStatement (SelectStatement cols tables conditions) = do
               if map toLower (fst tup) == "min"
                 then
                   c ++ [Column ("MIN(" ++ (snd tup) ++ ")") IntegerType]
+              else if map toLower (fst tup) == "now"
+                then
+                  c ++ [Column ("NOW()") StringType] 
               else
                   c ++ [Column ("SUM(" ++ (snd tup) ++ ")") IntegerType]
 
@@ -461,8 +480,11 @@ executeStatement (UpdateStatement table columns values condition) = do
             Left err -> return $ Left err
             Right parsedValues -> do
               let updatedDF = updateDataFrame (DataFrame dfCol dfRows) colsToUpdate parsedValues condition
-              (_, saveResult) <- saveFile (table, updatedDF)
-              return $ Right saveResult
+              case updatedDF of 
+                Left err -> return $ Left err
+                Right df -> do
+                  (_, saveResult) <- saveFile (table, df)
+                  return $ Right saveResult
   where
     parseColumns :: [String] -> [Column] -> Either ErrorMessage [Column]
     parseColumns colStrings dfColumns =
@@ -494,25 +516,32 @@ executeStatement (UpdateStatement table columns values condition) = do
               _ -> Left "Failed to parse Bool value"
 
 
-updateDataFrame :: DataFrame -> [Column] -> [Value] -> String -> DataFrame
-updateDataFrame (DataFrame columns rows) updateColumns newValues condition =
-  let updateRow row =
-        case checkAll condition (DataFrame columns [row]) row of
-          Right True  -> updateRowValues row
-          _           -> row
+updateDataFrame :: DataFrame -> [Column] -> [Value] -> String -> Either ErrorMessage DataFrame
+updateDataFrame (DataFrame columns rows) updateColumns newValues condition = do
+  let result = map updateRow rows
+  let (errors, updatedRows) = partitionEithers result
+  if null errors
+    then Right $ DataFrame columns updatedRows
+    else Left "Incorrect condition"
+  where
+    updateRow :: Row -> Either ErrorMessage Row
+    updateRow row =
+      case checkAll condition (DataFrame columns [row]) row of
+        Right True  -> Right $ updateRowValues row
+        Right False -> Right row
+        Left err -> Left err
 
-      updateRowValues row =
-        let updatedRow = zipWith updateValue columns row
-        in updatedRow
+    updateRowValues :: Row -> Row
+    updateRowValues row =
+      let updatedRow = zipWith updateValue columns row
+      in updatedRow
 
-      updateValue (Column colName colType) oldValue =
-        case lookup colName (zipWithColumnAndValue updateColumns newValues) of
-          Just newValue -> newValue
-          Nothing       -> oldValue
+    updateValue :: Column -> Value -> Value
+    updateValue (Column colName colType) oldValue =
+      case lookup colName (zipWithColumnAndValue updateColumns newValues) of
+        Just newValue -> newValue
+        Nothing       -> oldValue
 
-      zipWithColumnAndValue :: [Column] -> [Value] -> [(String, Value)]
-      zipWithColumnAndValue cols vals =
-        map (\(Column colName _, value) -> (colName, value)) (zip cols vals)
-
-      updatedRows = map updateRow rows
-  in DataFrame columns updatedRows
+    zipWithColumnAndValue :: [Column] -> [Value] -> [(String, Value)]
+    zipWithColumnAndValue cols vals =
+      map (\(Column colName _, value) -> (colName, value)) (zip cols vals)
