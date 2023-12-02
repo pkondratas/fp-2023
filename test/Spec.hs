@@ -1,17 +1,32 @@
 import Data.Either
+import Control.Monad.IO.Class (MonadIO (liftIO))
+import Control.Monad.Free (Free (..))
+import Data.Functor((<&>))
+import Data.List qualified as L
 import Data.Maybe ()
 import InMemoryTables qualified as D
 import Lib1
 import Lib2
+import Lib3
 import Test.Hspec
 import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType, IntegerType), Value (StringValue, IntegerValue, NullValue), Row)
+import InMemoryTables ( TableName, database )
 
--- data ParsedStatement
---   = ShowTable String
---   | ShowTables
---   | SelectStatement [String] String String
---   deriving (Show, Eq)
-
+runExecuteIO :: Lib3.Execution r -> IO r
+runExecuteIO (Pure r) = return r
+runExecuteIO (Free step) = do
+    next <- runStep step
+    runExecuteIO next
+  where
+    runStep :: Lib3.ExecutionAlgebra a -> IO a
+    runStep (Lib3.LoadFile table_name next) =
+      case lookup table_name database of
+        Just df -> return $ next $ Right df
+        Nothing -> return (next $ Left $ "Table " ++ table_name ++ " doesn't exist.")
+    runStep (Lib3.SaveFile tuple next) = 
+      return $ next tuple
+    runStep (Lib3.GetTableNames next) = 
+      return $ next ([tableName | (tableName, _) <- database])
 
 main :: IO ()
 main = hspec $ do
@@ -53,11 +68,11 @@ main = hspec $ do
     it "parse sHoW TaBLe aaa;" $ do
       Lib2.parseStatement "sHoW TaBLe aaa;" `shouldBe` Right (ShowTable "aaa")
     it "parse SELECT col1 col2 FROM table1;" $ do
-      Lib2.parseStatement "SELECT col1 col2 FROM table1;" `shouldBe` Right (SelectStatement ["col1", "col2"] "table1" "")
+      Lib2.parseStatement "SELECT col1 col2 FROM table1;" `shouldBe` Right (SelectStatement ["col1", "col2"] ["table1"] "")
     it "parse SELECT col1 col2 FROM table1 WHERE a > b;" $ do
-      Lib2.parseStatement "SELECT col1 col2 FROM table1 WHERE a > b;" `shouldBe` Right (SelectStatement ["col1", "col2"] "table1" "a > b")
+      Lib2.parseStatement "SELECT col1 col2 FROM table1 WHERE a > b;" `shouldBe` Right (SelectStatement ["col1", "col2"] ["table1"] "a > b")
     it "parse SELECT col1 col2 FROM table1 WHERE a > b AND a > c AND b > c;" $ do
-      Lib2.parseStatement "SELECT col1 col2 FROM table1 WHERE a > b AND a > c AND b > c;" `shouldBe` Right (SelectStatement ["col1", "col2"] "table1" "a > b AND a > c AND b > c")
+      Lib2.parseStatement "SELECT col1 col2 FROM table1 WHERE a > b AND a > c AND b > c;" `shouldBe` Right (SelectStatement ["col1", "col2"] ["table1"] "a > b AND a > c AND b > c")
     it "parse Show tabLeS asdsadsad;" $ do
       Lib2.parseStatement "Show tabLeS asdsadsad;" `shouldSatisfy` isLeft
     it "parse Show tabLe;" $ do
@@ -87,37 +102,42 @@ main = hspec $ do
       Lib2.executeStatement ShowTables `shouldBe` Right (DataFrame [Column "Tables" StringType] [[StringValue "employees"], [StringValue "invalid1"], [StringValue "invalid2"], [StringValue "long_strings"], [StringValue "flags"]])
     
     it "returns a Dataframe from: SELECT id name surname FROM employees" $ do
-      Lib2.executeStatement (SelectStatement ["id", "name", "surname"] "employees" "") 
+      Lib2.executeStatement (SelectStatement ["id", "name", "surname"] ["employees"] "") 
       `shouldBe` Right (DataFrame [Column "id" IntegerType, Column "name" StringType, Column "surname" StringType] [[IntegerValue 1, StringValue "Vi", StringValue "Po"], [IntegerValue 2, StringValue "Ed", StringValue "Dl"]])
     
     it "returns a DataFrame with MIN function" $ do
-      Lib2.executeStatement (SelectStatement ["min(id)"] "employees" "") `shouldBe` Right (DataFrame [Column "MIN(id)" IntegerType] [[IntegerValue 1]])
+      Lib2.executeStatement (SelectStatement ["min(id)"] ["employees"] "") `shouldBe` Right (DataFrame [Column "MIN(id)" IntegerType] [[IntegerValue 1]])
    
     it "returns a DataFrame with SUM function" $ do
-      Lib2.executeStatement (SelectStatement ["sum(id)"] "employees" "") `shouldBe` Right (DataFrame [Column "SUM(id)" IntegerType] [[IntegerValue 3]])
+      Lib2.executeStatement (SelectStatement ["sum(id)"] ["employees"] "") `shouldBe` Right (DataFrame [Column "SUM(id)" IntegerType] [[IntegerValue 3]])
     
     it "returns LEFT when column is not found" $ do
-      Lib2.executeStatement (SelectStatement ["sum(iadqd)"] "employees" "") `shouldBe` Left "(Some of the) Column(s) not found."
+      Lib2.executeStatement (SelectStatement ["sum(iadqd)"] ["employees"] "") `shouldBe` Left "(Some of the) Column(s) not found."
     
     it "returns Left when table is not found" $ do
-      Lib2.executeStatement (SelectStatement ["sum(id)"] "emyees" "") `shouldBe` Left "Table not found in the database"
+      Lib2.executeStatement (SelectStatement ["sum(id)"] ["emyees"] "") `shouldBe` Left "Table not found in the database"
 
     it "returns a Dataframe from: SELECT id name FROM employees WHERE id > 1" $ do
-      Lib2.executeStatement (SelectStatement ["id", "name"] "employees" "id > 1") `shouldBe` 
+      Lib2.executeStatement (SelectStatement ["id", "name"] ["employees"] "id > 1") `shouldBe` 
        Right (DataFrame [Column "id" IntegerType, Column "name" StringType] [[IntegerValue 2, StringValue "Ed"]])
     
     it "returns a Dataframe from: SELECT id name FROM employees WHERE id >= 1 AND id != 2" $ do
-      Lib2.executeStatement (SelectStatement ["id", "name"] "employees" "id >= 1 AND id != 2") `shouldBe` 
+      Lib2.executeStatement (SelectStatement ["id", "name"] ["employees"] "id >= 1 AND id != 2") `shouldBe` 
        Right (DataFrame [Column "id" IntegerType, Column "name" StringType] [[IntegerValue 1, StringValue "Vi"]])
     
     it "returns a Dataframe from: SELECT id name FROM employees WHERE 1 < 2" $ do
-      Lib2.executeStatement (SelectStatement ["id", "name"] "employees" "1 < 2") `shouldBe` 
+      Lib2.executeStatement (SelectStatement ["id", "name"] ["employees"] "1 < 2") `shouldBe` 
        Right (DataFrame [Column "id" IntegerType, Column "name" StringType] [[IntegerValue 1, StringValue "Vi"], [IntegerValue 2, StringValue "Ed"]])
     
     it "returns a Dataframe from: SELECT id name FROM employees WHERE id > 1 AND id < 5 AND id != 3 AND 5 != 10" $ do
-      Lib2.executeStatement (SelectStatement ["id", "name"] "employees" "id > 1 AND id < 5 AND id != 3 AND 5 != 10") `shouldBe` 
+      Lib2.executeStatement (SelectStatement ["id", "name"] ["employees"] "id > 1 AND id < 5 AND id != 3 AND 5 != 10") `shouldBe` 
        Right (DataFrame [Column "id" IntegerType, Column "name" StringType] [ [IntegerValue 2, StringValue "Ed"]])
 
     it "returns a Dataframe from: SELECT min(id) from employees WHERE id != 1 AND 1 < 2" $ do
-      Lib2.executeStatement (SelectStatement ["min(id)"] "employees" "id != 1 AND 1 < 2") `shouldBe` 
+      Lib2.executeStatement (SelectStatement ["min(id)"] ["employees"] "id != 1 AND 1 < 2") `shouldBe` 
        Right (DataFrame [Column "MIN(id)" IntegerType] [[IntegerValue 2]])
+
+  describe "Lib3" $ do
+    it "returns a DataFrame with inserted line" $ do
+      result <- runExecuteIO $ Lib3.executeSql "INSERT INTO employees (id,name,surname) VALUES (123, 'Namerino', 'Surnamerino');"
+      result `shouldBe` Right (DataFrame [Column "id" IntegerType, Column "name" StringType, Column "surname" StringType][[IntegerValue 1, StringValue "Vi", StringValue "Po"],[IntegerValue 2, StringValue "Ed", StringValue "Dl"],[IntegerValue 123, StringValue "Namerino", StringValue "Surnamerino"]]) 
