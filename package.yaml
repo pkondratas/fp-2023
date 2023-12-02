@@ -26,6 +26,8 @@ dependencies:
 - bytestring
 - filepath
 - directory
+- free
+- time
 
 default-extensions:
 - ImportQualifiedPost

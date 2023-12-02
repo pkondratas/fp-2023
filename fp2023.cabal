@@ -100,9 +100,11 @@ executable fp2023-select-all
     , extra
     , filepath
     , fp2023
+    , free
     , repline
     , terminal-size
     , text
+    , time
   default-language: Haskell2010
 
 executable fp2023-select-more
@@ -122,9 +124,11 @@ executable fp2023-select-more
     , extra
     , filepath
     , fp2023
+    , free
     , repline
     , terminal-size
     , text
+    , time
   default-language: Haskell2010
 
 test-suite fp2023-test
@@ -144,6 +148,8 @@ test-suite fp2023-test
     , directory
     , filepath
     , fp2023
+    , free
     , hspec
     , text
+    , time
   default-language: Haskell2010

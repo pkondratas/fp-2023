@@ -26,7 +26,7 @@ import Control.Applicative ((<|>))
 import Text.Read (readMaybe)
 import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
-    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement),
+    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement, DeleteStatement),
       parseStatement,
       checkAll,
       applyConditions )
