@@ -9,6 +9,7 @@ import Lib1
 import Lib2
 import Lib3
 import Test.Hspec
+import Data.Time ( UTCTime, getCurrentTime )
 import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType, IntegerType), Value (StringValue, IntegerValue, NullValue), Row)
 import InMemoryTables ( TableName, database )
 
@@ -27,6 +28,12 @@ runExecuteIO (Free step) = do
       return $ next tuple
     runStep (Lib3.GetTableNames next) = 
       return $ next ([tableName | (tableName, _) <- database])
+    runStep (Lib3.GetTime next ) =
+      return $ next testTime
+
+testTime :: UTCTime
+testTime = read "2023-12-24 19:00:00 UTC"
+
 
 main :: IO ()
 main = hspec $ do
@@ -169,6 +176,20 @@ main = hspec $ do
     it "returns a DataFrame with inserted line" $ do
       result <- runExecuteIO $ Lib3.executeSql "INSERT INTO noTable (id,name) VALUES (3, 'remigijus');"
       result `shouldBe` Left "Table noTable doesn't exist."
+
+    it "returns a DataFrame from: Select NOW(), employees.id from employees;" $ do
+      result <- runExecuteIO $ Lib3.executeSql "Select NOW(), employees.id from employees;"
+      result `shouldBe` Right (DataFrame [Column "employees.id" IntegerType, Column "NOW()" StringType] [[IntegerValue 1, StringValue "2023-12-24 19:00:00"], 
+                                                                                                         [IntegerValue 2, StringValue "2023-12-24 19:00:00"]])
+    it "returns a DataFrame from: Select NOW(), people.name from people;" $ do
+      result <- runExecuteIO $ Lib3.executeSql "Select NOW(), people.name from people;"
+      result `shouldBe` Right (DataFrame [Column "people.name" StringType, Column "NOW()" StringType] [[StringValue "domas", StringValue "2023-12-24 19:00:00"],
+                                                                                                       [StringValue "petras", StringValue "2023-12-24 19:00:00"],
+                                                                                                       [StringValue "emilja", StringValue "2023-12-24 19:00:00"], 
+                                                                                                       [StringValue "greta", StringValue "2023-12-24 19:00:00"]])                                                                                                 
+    it "returns left if table does not exist" $ do
+      result <- runExecuteIO $ Lib3.executeSql "Select NOW(), employees.id from yees;" 
+      result `shouldSatisfy` isLeft
 
     it "returns a DataFrame with deleted rows" $ do 
       result <- runExecuteIO $ Lib3.executeSql "Delete from people;"
