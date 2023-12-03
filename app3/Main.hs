@@ -72,7 +72,9 @@ runExecuteIO (Free step) = do
     where
         -- probably you will want to extend the interpreter
         runStep :: Lib3.ExecutionAlgebra a -> IO a
-        runStep (Lib3.GetTime next) = getCurrentTime >>= return . next
+        runStep (Lib3.GetTime next) = do
+          time <- getCurrentTime
+          return $ next time
         runStep (Lib3.LoadFile table_name next) = do
           existingFile <- doesFileExist ("db" ++ [pathSeparator] ++ table_name ++ ".json")
           if existingFile 

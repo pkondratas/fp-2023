@@ -7,6 +7,7 @@
 {-# HLINT ignore "Use zipWith" #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Eta reduce" #-}
+{-# HLINT ignore "Use if" #-}
 
 module Lib3
   ( executeSql,
@@ -21,7 +22,7 @@ import Data.Char
 import Data.List ( intercalate, elemIndex, isPrefixOf, nub )
 import Control.Monad.Free (Free (..), liftF)
 import DataFrame (DataFrame)
-import Data.Time ( UTCTime )
+import Data.Time ( UTCTime, formatTime, defaultTimeLocale )
 import Data.Aeson hiding (Value)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -72,12 +73,12 @@ executeSql sql =
     Right (SelectStatement cols tables conditions) -> executeStatement (SelectStatement cols tables conditions)
     Right (InsertStatement table_name cols values) -> do
       result <- loadFile table_name
-      case result of 
+      case result of
         Left err -> return $ Left err
         Right (DataFrame cls rws) -> do
           case parseRows cls cols values of
             Left err -> return $ Left err
-            Right newRows -> do 
+            Right newRows -> do
               (_, df) <- saveFile (table_name, DataFrame cls (rws ++ newRows))
               return $ Right df
     Right (UpdateStatement table columns values condition) -> executeStatement (UpdateStatement table columns values condition)
@@ -247,7 +248,7 @@ instance FromJSON ColumnType where
   parseJSON (String "integer") = return IntegerType
   parseJSON (String "string")  = return StringType
   parseJSON (String "bool")    = return BoolType
-  parseJSON _                   = fail "Invalid ColumnType"
+  parseJSON _                  = fail "Invalid ColumnType"
 
 instance FromJSON Column where
   parseJSON (Object v) = do
@@ -274,14 +275,6 @@ instance FromJSON DataFrame where
 jsonParser :: String -> Maybe DataFrame
 jsonParser jsonData = decode (BSL.fromStrict $ TE.encodeUtf8 $ T.pack jsonData)
 
---main :: IO ()
---main = do
-  --jsonData <- -- path
-  --let parsedData = decode (BSL.fromStrict $ TE.encodeUtf8 $ T.pack jsonData) :: Maybe DataFrame
-  --case parsedData of
-    --Just df -> print df
-    --Nothing -> putStrLn "Failed to parse JSON"
-
 -- execute SHOW TABLE table_name;
 executeStatement :: ParsedStatement -> Execution (Either ErrorMessage DataFrame)
 executeStatement (ShowTable table_name) = do
@@ -307,12 +300,43 @@ executeStatement (SelectStatement cols tables conditions) = do
           if validateColumns (map (\(Column name _) -> name) c) c cols
             then case executeSelect c r cols of
               Left err -> Pure (Left err)
-              Right res -> Pure (Right res)
+              Right res ->
+                case checkIfNowExists cols of
+                  False -> Pure (Right res)
+                  True -> addNowColsToDataFrame res
           else if checkIfAll cols
             then Pure (Right (DataFrame c r))
           else
             Pure (Left "(Some of the) Column(s) not found.")
   where
+    addNowColsToDataFrame :: DataFrame -> Execution (Either ErrorMessage DataFrame)
+    addNowColsToDataFrame (DataFrame cs rows) = do
+      time <- getTime
+      return $ Right (DataFrame cs (addToDataFrame cs rows (replicate (length rows) []) time))
+
+    addToDataFrame :: [Column] -> [Row] -> [Row] -> UTCTime -> [Row]
+    addToDataFrame [] _ newRows _ = newRows
+    addToDataFrame ((Column name _):cs) rows newRows time =
+          if name == "NOW()"
+            then addToDataFrame cs rows (map (++ [timeToValue time] ) newRows) time
+          else
+            addToDataFrame cs (map tail rows) (addValues newRows (map head rows)) time
+
+    addValues :: [[Value]] -> [Value] -> [[Value]]
+    addValues rows vals =
+      zipWith (\value list -> list ++ [value]) vals rows
+      
+    timeToValue :: UTCTime -> Value
+    timeToValue currentTime =
+      StringValue $ formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S" currentTime
+
+    checkIfNowExists :: [String] -> Bool
+    checkIfNowExists [] = False
+    checkIfNowExists (c:cs) =
+      if (map toLower c) == "now()"
+        then True
+      else checkIfNowExists cs
+
     --Cia gaunami DataFrame is tableName
     loadTables :: [String] -> Execution (Either ErrorMessage [DataFrame])
     loadTables names = loadTables' names []
@@ -340,6 +364,7 @@ executeStatement (SelectStatement cols tables conditions) = do
     checkIfSumOrMin str columns
         | ("sum(" `isPrefixOf` (map toLower str) || "min(" `isPrefixOf`map toLower str) && last str == ')' =
             checkAgainColumn (drop 4 (init str)) columns
+        | (map toLower str) == "now()" = True
         | otherwise = False
 
         -- Define a sample function to check the column
@@ -411,6 +436,7 @@ executeStatement (SelectStatement cols tables conditions) = do
           case take 4 (map toLower c) of
             "min(" -> extractFunctions cs (cols, functions ++ [splitByBracket c])
             "sum(" -> extractFunctions cs (cols, functions ++ [splitByBracket c])
+            "now(" -> extractFunctions cs (cols, functions ++ [("now()", "")])
             _ ->  extractFunctions cs (cols ++ [c], functions)
 
         -- -- cia baigta
@@ -440,11 +466,10 @@ executeStatement (SelectStatement cols tables conditions) = do
           where
             addValueToCols :: [Column] -> (String, String) -> [Column]
             addValueToCols c tup =
-              if map toLower (fst tup) == "min"
-                then
-                  c ++ [Column ("MIN(" ++ (snd tup) ++ ")") IntegerType]
-              else
-                  c ++ [Column ("SUM(" ++ (snd tup) ++ ")") IntegerType]
+              case map toLower (fst tup) of
+                "min"   -> c ++ [Column ("MIN(" ++ (snd tup) ++ ")") IntegerType]
+                "sum"   -> c ++ [Column ("SUM(" ++ (snd tup) ++ ")") IntegerType]
+                "now()" -> c ++ [Column "NOW()" StringType]
 
         -- reikia atskirt kur yra column name ir kur yra min ir sum
         fun = extractFunctions selectedColumnNames ([], [])
@@ -453,9 +478,7 @@ executeStatement (SelectStatement cols tables conditions) = do
         selectedColumns = extractColumns selectedColumnNames columns
         allCols = combineColsAndFunctions selectedColumns (snd fun)
       in
-        if null (snd fun)
-          then Right (DataFrame allCols allRows)
-          else Right (DataFrame allCols [head allRows])
+        Right (DataFrame allCols allRows)
 
 executeStatement (UpdateStatement table columns values condition) = do
   result <- loadFile table
@@ -469,7 +492,7 @@ executeStatement (UpdateStatement table columns values condition) = do
             Left err -> return $ Left err
             Right parsedValues -> do
               let updatedDF = updateDataFrame (DataFrame dfCol dfRows) colsToUpdate parsedValues condition
-              case updatedDF of 
+              case updatedDF of
                 Left err -> return $ Left err
                 Right df -> do
                   (_, saveResult) <- saveFile (table, df)
