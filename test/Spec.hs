@@ -151,13 +151,25 @@ main = hspec $ do
                                                                                               [StringValue "Vi",StringValue "greta"]])
     it "returns left error when column is not existent" $ do
       Lib2.executeStatement (SelectStatement["employees.name","people.NonExistetColumn"] ["employees", "people"] "employees.id = people.id ") `shouldBe`
-        Left "(Some of the) Column(s) not found."                                                                                          
+        Left "(Some of the) Column(s) not found."
+
   describe "Lib3" $ do
     it "returns a DataFrame with inserted line" $ do
       result <- runExecuteIO $ Lib3.executeSql "INSERT INTO employees (id,name,surname) VALUES (123, 'Namerino', 'Surnamerino');"
       result `shouldBe` Right (DataFrame [Column "id" IntegerType, Column "name" StringType, Column "surname" StringType][[IntegerValue 1, StringValue "Vi", StringValue "Po"],
                                                                                                                           [IntegerValue 2, StringValue "Ed", StringValue "Dl"],
                                                                                                                           [IntegerValue 123, StringValue "Namerino", StringValue "Surnamerino"]])
+    it "returns a DataFrame with inserted line" $ do
+      result <- runExecuteIO $ Lib3.executeSql "INSERT INTO people (id,name) VALUES (3, 'remigijus');"
+      result `shouldBe` Right (DataFrame[Column "id" IntegerType, Column "name" StringType][[IntegerValue 1, StringValue "domas"],
+                                                                                            [IntegerValue 2, StringValue "petras"],
+                                                                                            [IntegerValue 1, StringValue "emilja"],
+                                                                                            [IntegerValue 1, StringValue "greta"],
+                                                                                            [IntegerValue 3, StringValue "remigijus"]])
+    it "returns a DataFrame with inserted line" $ do
+      result <- runExecuteIO $ Lib3.executeSql "INSERT INTO noTable (id,name) VALUES (3, 'remigijus');"
+      result `shouldBe` Left "Table noTable doesn't exist."
+
     it "returns a DataFrame with deleted rows" $ do 
       result <- runExecuteIO $ Lib3.executeSql "Delete from people;"
       result `shouldBe` Right (DataFrame[Column "id" IntegerType, Column "name" StringType][])
@@ -206,4 +218,12 @@ main = hspec $ do
       `shouldBe` "{ \"columns\": [], \"rows\": [] }"
 
     it "Parses Json into a DataFrame" $ do
-      Lib3.jsonParser ("{ \"columns\": [], \"rows\": [] }") `shouldBe` Just(DataFrame[][])                                                                                             
+      Lib3.jsonParser ("{ \"columns\": [], \"rows\": [] }") `shouldBe` Just(DataFrame[][])  
+
+    it "Parses Json into a DataFrame" $ do
+      Lib3.jsonParser ("{ \"columns\": [{ \"name\": \"id\", \"type\": \"integer\" }, { \"name\": \"name\", \"type\": \"string\" }, { \"name\": \"surname\", \"type\": \"string\" }], \"rows\": [] }")
+      `shouldBe` Just(DataFrame[Column "id" IntegerType, Column "name" StringType, Column "surname" StringType][]) 
+    it "Parses Json into a DataFrame" $ do
+      Lib3.jsonParser  ("{ \"columns\": [{ \"name\": \"id\", \"type\": \"integer\" }, { \"name\": \"name\", \"type\": \"string\" }, { \"name\": \"surname\", \"type\": \"string\" }], \"rows\": [[{\"IntegerValue\":1}, {\"StringValue\":\"Vi\"}, {\"StringValue\":\"Po\"}], [{\"IntegerValue\":2}, {\"StringValue\":\"Ed\"}, {\"StringValue\":\"Dl\"}]] }")
+      `shouldBe` Just (DataFrame[Column "id" IntegerType, Column "name" StringType, Column "surname" StringType][ [IntegerValue 1, StringValue "Vi", StringValue "Po"],
+                                                                                                                       [IntegerValue 2, StringValue "Ed", StringValue "Dl"]])                                                                                       
