@@ -288,7 +288,7 @@ executeStatement (ShowTable table_name) = do
   result <- loadFile table_name
   case result of
     Left err -> return $ Left err
-    Right df -> return $ Right df
+    Right (DataFrame cols _) -> return $ Right (DataFrame [Column "Columns" StringType] (map (\(Column name _) -> [StringValue name]) cols))
 
 -- execute SHOW TABLES;
 executeStatement ShowTables = do
@@ -332,7 +332,7 @@ executeStatement (SelectStatement cols tables conditions) = do
     addValues :: [[Value]] -> [Value] -> [[Value]]
     addValues rows vals =
       zipWith (\value list -> list ++ [value]) vals rows
-      
+
     timeToValue :: UTCTime -> Value
     timeToValue currentTime =
       StringValue $ formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S" currentTime
