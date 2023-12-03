@@ -7,10 +7,6 @@
         {
             "name": "name",
             "type": "string"
-        },
-        {
-            "name": "surname",
-            "type": "string"
         }
     ],
     "rows": [
@@ -19,10 +15,15 @@
                 "IntegerValue": 1
             },
             {
-                "StringValue": "Alexandr"
+                "StringValue": "domas"
+            }
+        ],
+        [
+            {
+                "IntegerValue": 2
             },
             {
-                "StringValue": "Po"
+                "StringValue": "petras"
             }
         ],
         [
@@ -30,10 +31,15 @@
                 "IntegerValue": 1
             },
             {
-                "StringValue": "Ed"
+                "StringValue": "emilja"
+            }
+        ],
+        [
+            {
+                "IntegerValue": 1
             },
             {
-                "StringValue": "Dl"
+                "StringValue": "greta"
             }
         ]
     ]
