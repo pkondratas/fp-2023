@@ -19,23 +19,24 @@ module Lib3
 where
 
 import Data.Char
-import Data.List ( intercalate, elemIndex, isPrefixOf, nub )
+import Data.List ( intercalate, elemIndex, isPrefixOf, nub, nubBy )
 import Control.Monad.Free (Free (..), liftF)
 import DataFrame (DataFrame)
 import Data.Time ( UTCTime, formatTime, defaultTimeLocale )
 import Data.Aeson hiding (Value)
+import InMemoryTables ( database )
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Control.Applicative ((<|>))
 import Text.Read (readMaybe)
+import Control.Monad.Trans.Class (lift)
 import Data.Either (partitionEithers)
 import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
     ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement, UpdateStatement, DeleteStatement),
-      parseStatement,
-      checkAll,
-      applyConditions )
+      parseStatement)
+import Control.Monad.Trans.Except (runExceptT, ExceptT (ExceptT), throwE)
 
 type TableName = String
 type FileContent = String
@@ -298,28 +299,26 @@ executeStatement ShowTables = do
 --execute SELECT cols FROM table WHERE ... AND ... AND ...;
 executeStatement (SelectStatement cols tables conditions) = do
   result <- loadTables tables
-  case result of
+  case result of 
     Left err -> return $ Left err
-    Right dataFrames ->
-      case applyConditions conditions tables dataFrames of
-        Left err -> Pure (Left err)
-        Right (DataFrame c r) ->
-          if validateColumns (map (\(Column name _) -> name) c) c cols
-            then case executeSelect c r cols of
-              Left err -> Pure (Left err)
-              Right res ->
-                case checkIfNowExists cols of
-                  False -> Pure (Right res)
-                  True -> addNowColsToDataFrame res
-          else if checkIfAll cols
-            then Pure (Right (DataFrame c r))
-          else
-            Pure (Left "(Some of the) Column(s) not found.")
+    Right dataFrames -> runExceptT $ do
+      (DataFrame c r) <- ExceptT . return $ applyConditions conditions tables dataFrames
+      if validateColumns (map (\(Column name _) -> name) c) c cols
+        then do
+          res <- ExceptT . return $ executeSelect c r cols
+          case checkIfNowExists cols of
+            False -> return res
+            True -> lift $ addNowColsToDataFrame res
+      else if checkIfAll cols
+        then return $ DataFrame c r
+      else
+         throwE "(Some of the) Column(s) not found."
+
   where
-    addNowColsToDataFrame :: DataFrame -> Execution (Either ErrorMessage DataFrame)
+    addNowColsToDataFrame :: DataFrame -> Execution DataFrame
     addNowColsToDataFrame (DataFrame cs rows) = do
       time <- getTime
-      return $ Right (DataFrame cs (addToDataFrame cs rows (replicate (length rows) []) time))
+      return $ (DataFrame cs (addToDataFrame cs rows (replicate (length rows) []) time))
 
     addToDataFrame :: [Column] -> [Row] -> [Row] -> UTCTime -> [Row]
     addToDataFrame [] _ newRows _ = newRows
@@ -564,3 +563,183 @@ updateDataFrame (DataFrame columns rows) updateColumns newValues condition = do
     zipWithColumnAndValue :: [Column] -> [Value] -> [(String, Value)]
     zipWithColumnAndValue cols vals =
       map (\(Column colName _, value) -> (colName, value)) (zip cols vals)
+
+applyConditions :: String -> [String] -> [DataFrame] -> Either ErrorMessage DataFrame
+--Jeigu yra tik vienas tableName
+applyConditions conditions [tableName] [table] = do
+    case table of
+      (DataFrame columns rows) ->
+        if null conditions
+          then return (DataFrame (renameColumns tableName columns) rows)
+          else return (DataFrame (renameColumns tableName columns) (filterRows conditions (DataFrame (renameColumns tableName columns) rows) rows))
+
+--Jeigu yra daugiau
+applyConditions conditions tableNames tables = do
+  let joinedTable = joinTables tableNames tables
+  case joinedTable of
+        (DataFrame columns rows) ->
+          if null conditions
+            then return (DataFrame columns rows)
+            else return (DataFrame columns (filterRows conditions joinedTable rows))
+
+----------------------
+--For joining tables--
+----------------------
+joinTables :: [String] -> [DataFrame] -> DataFrame
+joinTables tableNames tables =
+  foldl (\acc (tableName, df) -> joinTwoTables (head tableNames) acc tableName df) baseTable restTables
+  where
+    baseTable = head tables
+    restTables =  zip (tail tableNames) (tail tables)
+
+joinTwoTables :: TableName -> DataFrame -> TableName -> DataFrame -> DataFrame
+joinTwoTables tableName1 df1 tableName2 df2 =
+  let commonColumns = findCommonColumns (renameColumns tableName1 (getColumns df1)) (renameColumns tableName2 (getColumns df2))
+      df1Renamed = DataFrame (renameColumns tableName1 (getColumns df1)) (getRows df1)
+      df2Renamed = DataFrame (renameColumns tableName2 (getColumns df2)) (getRows df2)
+      combinedDF = rowMultiplication df1Renamed df2Renamed
+  in removeDuplicateColumns commonColumns combinedDF
+
+findCommonColumns :: [Column] -> [Column] -> [String]
+findCommonColumns cols1 cols2 =
+  [colName1 | Column colName1 _ <- cols1, any (\(Column colName2 _) -> colName1 == colName2) cols2]
+
+renameColumns :: TableName -> [Column] -> [Column]
+renameColumns tableName cols =
+  [Column (tableName ++ "." ++ colName) colType | Column colName colType <- cols]
+
+rowMultiplication :: DataFrame -> DataFrame -> DataFrame
+rowMultiplication (DataFrame cols1 rows1) (DataFrame cols2 rows2) =
+  DataFrame (cols1 ++ cols2) [row1 ++ row2 | row1 <- rows1, row2 <- rows2]
+
+removeDuplicateColumns :: [String] -> DataFrame -> DataFrame
+removeDuplicateColumns commonColumns (DataFrame cols rows) =
+  DataFrame (nubBy (\(Column col1 _) (Column col2 _) -> col1 == col2) cols) rows
+
+getColumns :: DataFrame -> [Column]
+getColumns dataFrame = case dataFrame of
+  (DataFrame columns rows) -> columns
+
+getRows :: DataFrame -> [Row]
+getRows dataFrame = case dataFrame of
+  (DataFrame columns rows) -> rows
+
+-- Helper function to find a table by name in the database
+findTableByName :: String -> (TableName, DataFrame)
+findTableByName tableName =
+  case lookup tableName database of
+    Just df -> (tableName, df)
+    Nothing -> error ("Table not found: " ++ tableName)
+----------------------
+
+-- Filters rows based on the given conditions
+filterRows :: String -> DataFrame -> [Row] -> [Row]
+filterRows conditions table rows =
+    [row | row <- rows, checkAll conditions table row == Right True]
+
+checkCondition :: String -> DataFrame -> Row -> Either ErrorMessage Bool
+checkCondition condition table row = executeCondition $ getFirstThreeWords condition
+  where
+    getFirstThreeWords :: String -> Either ErrorMessage (String, String, String)
+    getFirstThreeWords input =
+      case words input of
+        [operand1, operator, operand2] -> Right (operand1, operator, operand2)
+        _ -> Left "Incorrect condition syntax"
+
+    -- Returns the operation value based on the operator provided in the condition string
+    executeCondition :: Either ErrorMessage (String, String, String) -> Either ErrorMessage Bool
+    executeCondition result = do
+      case result of
+        Left err -> Left err
+        Right (op1, operator, op2) -> do
+          case getOperandValue op1 of
+            Left err -> Left err
+            Right NullValue -> Right False
+            Right (IntegerValue operand1) -> do
+              case getOperandValue op2 of
+                Left err -> Left err
+                Right NullValue -> Right False
+                Right (IntegerValue operand2) -> do
+                  case operator of
+                    "=" -> Right (operand1 == operand2)
+                    "<>" -> Right (operand1 /= operand2)
+                    "!=" -> Right (operand1 /= operand2)
+                    "<" -> Right (operand1 < operand2)
+                    ">" -> Right (operand1 > operand2)
+                    "<=" -> Right (operand1 <= operand2)
+                    ">=" -> Right (operand1 >= operand2)
+                    _ -> Left "Incorrect condition syntax"
+
+    -- Returns an operand value based on the operand string (either a regular integer or a column value)
+    getOperandValue :: String -> Either ErrorMessage Value
+    getOperandValue opName =
+      if isInteger opName then
+        case reads opName of
+          [(intValue, _)] -> Right (IntegerValue intValue)
+      else
+        case getValueFromTable opName row of
+          Right (IntegerValue intValue) -> Right (IntegerValue intValue)
+          Right NullValue -> Right NullValue
+          _ -> Left "Column does not exist in this row"
+
+    -- Check if operand is an integer      
+    isInteger :: String -> Bool
+    isInteger str = case reads str :: [(Integer, String)] of
+      [(_, "")] -> True
+      _ -> False
+
+    -- Get the value from the DataFrame row by column name
+    getValueFromTable :: String -> Row -> Either ErrorMessage Value
+    getValueFromTable columnName currentRow =
+      let
+        toMaybeDataFrame :: DataFrame -> Maybe DataFrame
+        toMaybeDataFrame df = case df of
+          (DataFrame [] []) -> Nothing
+          _ -> Just df
+
+        -- Find the column index by columnName
+        maybeColumnIndex = toMaybeDataFrame table >>= \(DataFrame columns _) ->
+          elemIndex columnName (map (\(Column name _) -> name) columns)
+
+        maybeValue index =
+          case index of
+            Just i -> do
+              case currentRow `atMay` i of 
+                Just val -> Right val
+                Nothing -> Left "Column does not exist"
+            Nothing -> Left "Column does not exist"
+
+        -- Get value from the row
+        value = maybeValue maybeColumnIndex
+      in
+        value
+
+    -- Get an element at a specific index in a list
+    atMay :: [a] -> Int -> Maybe a
+    atMay [] _ = Nothing
+    atMay (x:_) 0 = Just x
+    atMay (_:xs) n = atMay xs (n - 1)
+
+checkAll :: String -> DataFrame -> Row -> Either ErrorMessage Bool
+checkAll conditions tableFrame row
+    | null conditions = Right True
+    | otherwise = checkAllConditions (splitByAnd conditions) tableFrame row
+
+checkAllConditions :: [String] -> DataFrame -> Row -> Either ErrorMessage Bool
+checkAllConditions [] _ _ = Right True -- Base case: all conditions have been checked and are true
+checkAllConditions (condition:rest) tableFrame row =
+    case checkCondition condition tableFrame row of
+        Left errMsg -> Left errMsg -- If any condition fails, return the error message
+        Right True -> checkAllConditions rest tableFrame row -- If condition is true, check the rest of the conditions
+        Right False -> Right False -- If condition is false, return false immediately
+
+splitByAnd :: String -> [String]
+splitByAnd input = splitByWord "and" input
+
+splitByWord :: String -> String -> [String]
+splitByWord _ [] = [""]
+splitByWord word input@(x:xs)
+    | word `isPrefixOf` map toLower input = "" : splitByWord word (drop (length word) input)
+    | otherwise = (x : head rest) : tail rest
+    where
+        rest = splitByWord word xs
