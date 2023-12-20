@@ -35,7 +35,7 @@ import Data.Either (partitionEithers)
 import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
     ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement, UpdateStatement, DeleteStatement),
-      parseStatement)
+      parseStatement, sortDataFrame)
 import Control.Monad.Trans.Except (runExceptT, ExceptT (ExceptT), throwE)
 
 type TableName = String
@@ -71,7 +71,7 @@ executeSql sql =
     Right (ShowTable table_name) ->
       executeStatement (ShowTable table_name)
     Right ShowTables -> executeStatement ShowTables
-    Right (SelectStatement cols tables conditions) -> executeStatement (SelectStatement cols tables conditions)
+    Right (SelectStatement cols tables conditions orderCols sortMode) -> executeStatement (SelectStatement cols tables conditions orderCols sortMode)
     Right (InsertStatement table_name cols values) -> do
       result <- loadFile table_name
       case result of
@@ -297,20 +297,20 @@ executeStatement ShowTables = do
   return $ Right $ DataFrame [Column "Tables" StringType] (map (\name -> [StringValue name]) tableNames)
 
 --execute SELECT cols FROM table WHERE ... AND ... AND ...;
-executeStatement (SelectStatement cols tables conditions) = do
+executeStatement (SelectStatement cols tables conditions orderCols sortMode) = do
   result <- loadTables tables
   case result of 
     Left err -> return $ Left err
     Right dataFrames -> runExceptT $ do
-      (DataFrame c r) <- ExceptT . return $ applyConditions conditions tables dataFrames
+      (DataFrame c r) <- ExceptT . return $ applyConditions conditions tables dataFrames--CIA PRIDETI ORDERINIMA
       if validateColumns (map (\(Column name _) -> name) c) c cols
         then do
           res <- ExceptT . return $ executeSelect c r cols
           case checkIfNowExists cols of
-            False -> return res
+            False -> return $ sortDataFrame res orderCols sortMode
             True -> lift $ addNowColsToDataFrame res
       else if checkIfAll cols
-        then return $ DataFrame c r
+        then return $ sortDataFrame (DataFrame c r) orderCols sortMode
       else
          throwE "(Some of the) Column(s) not found."
 

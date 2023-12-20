@@ -11,18 +11,16 @@ module Lib2
     executeStatement,
     checkAll,
     applyConditions,
+    sortDataFrame,
     ParsedStatement(..)
   )
 where
 
-import Data.List ( elemIndex, isPrefixOf )
-import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType, IntegerType), Value (StringValue, IntegerValue, NullValue), Row)
+import DataFrame (DataFrame (DataFrame), Column (Column), ColumnType (StringType, IntegerType), Value (..), Row)
 import InMemoryTables ( TableName, database )
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
-import Data.List (isPrefixOf)
 import Debug.Trace
-import Data.List (groupBy)
 import Data.Char (isSpace)
 import Data.List
 
@@ -33,10 +31,13 @@ type Database = [(TableName, DataFrame.DataFrame)]
 data ParsedStatement
   = ShowTable String
   | ShowTables
-  | SelectStatement [String] [String] String
+  | SelectStatement [String] [String] String [String] SortMode
   | InsertStatement String [String] [[String]]
   | DeleteStatement String String
   | UpdateStatement String [String] [String] String
+  deriving (Show, Eq)
+
+data SortMode = Ascending | Descending
   deriving (Show, Eq)
 
 -- Parses user input into an entity representing a parsed
@@ -44,14 +45,14 @@ data ParsedStatement
 parseStatement :: String -> Either ErrorMessage ParsedStatement
 -- parseStatement _ = Left "Not implemented: yooooo"
 parseStatement query =
-  if map toLower (takeWhile (not . isSpace) query) == "insert" && elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
+  if Data.List.map toLower (Data.List.takeWhile (not . isSpace) query) == "insert" && Data.List.elemIndex ';' query /= Nothing && fromMaybe (-1) (Data.List.elemIndex ';' query) == Data.List.length query - 1
     then do
       identifyCommand (splitOnWhitespaceInQuotes query) -- Print cols and valuesBlock identifyCommand (splitOnWhitespaceInQuotes query)
-  else if map toLower (takeWhile (not . isSpace) query) == "update" && elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
+  else if Data.List.map toLower (Data.List.takeWhile (not . isSpace) query) == "update" && Data.List.elemIndex ';' query /= Nothing && fromMaybe (-1) (Data.List.elemIndex ';' query) == Data.List.length query - 1
     then do
       identifyCommand (splitOnWhitespaceInQuotes2 query)
-  else if elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
-    then identifyCommand (words (init query))
+  else if Data.List.elemIndex ';' query /= Nothing && fromMaybe (-1) (Data.List.elemIndex ';' query) == Data.List.length query - 1
+    then identifyCommand (Data.List.words (Data.List.init query))
   else
     Left "Invalid syntax."
 
@@ -67,29 +68,29 @@ parseStatement query =
     validCommand :: String -> [String] -> Either ErrorMessage ParsedStatement
     validCommand _ [] = Left "Too few arguments."
     validCommand command q
-      | map toLower command == "show" = case map toLower (head q) of
+      | Data.List.map toLower command == "show" = case Data.List.map toLower (Data.List.head q) of
           "table" ->
-            case identifyShowTableName (tail q) of
+            case identifyShowTableName (Data.List.tail q) of
               Left err -> Left err
               Right result -> Right result
           "tables" ->
-            if null (tail q)
+            if Data.List.null (Data.List.tail q)
               then Right ShowTables
             else
               Left "Wrong query syntax."
           _ -> Left "Unsuported command/wrong syntax."
-      | map toLower command == "select" = case splitSelectStatement q of
+      | Data.List.map toLower command == "select" = case splitSelectStatement q of
         Left err -> Left err
         Right result -> Right result
-      | map toLower command == "delete" = case splitDeleteStatement q of
+      | Data.List.map toLower command == "delete" = case splitDeleteStatement q of
         Left err -> Left err
         Right result -> Right result
-      | map toLower command == "update" = case splitUpdateStatement q of
+      | Data.List.map toLower command == "update" = case splitUpdateStatement q of
         Left err -> Left err
         Right result -> Right result
-      | map toLower command == "insert" = case map toLower (head q) of
+      | Data.List.map toLower command == "insert" = case Data.List.map toLower (Data.List.head q) of
           "into" ->
-            case identifyInsertValues (tail q) of
+            case identifyInsertValues (Data.List.tail q) of
               Left err -> Left err
               Right result -> Right result
           _ -> Left "Missing 'INTO' keyword after 'INSERT'."
@@ -97,86 +98,105 @@ parseStatement query =
       
                 -- Function to split the query at whitespaces outside quotes
     splitOnWhitespaceInQuotes :: String -> [String]
-    splitOnWhitespaceInQuotes s = filter (not . null) $ case dropWhile isSpace s of
+    splitOnWhitespaceInQuotes s = Data.List.filter (not . Data.List.null) $ case Data.List.dropWhile isSpace s of
       "" -> []  -- If the string is empty, return an empty list.
       ('\'':cs) ->
         if checkConditionB cs
-          then splitOnWhitespaceInQuotes (dropWhile isSpace cs)
+          then splitOnWhitespaceInQuotes (Data.List.dropWhile isSpace cs)
           else
-            let (word, rest) = break (== '\'') cs
-            in word : splitOnWhitespaceInQuotes (dropWhile isSpace rest)
+            let (word, rest) = Data.List.break (== '\'') cs
+            in word : splitOnWhitespaceInQuotes (Data.List.dropWhile isSpace rest)
       (c:cs) ->
-        let (word, rest) = break isSpace s
-        in if word `elem` [", ", "),"] then splitOnWhitespaceInQuotes (dropWhile isSpace rest)
-          else word : splitOnWhitespaceInQuotes (dropWhile isSpace rest)
+        let (word, rest) = Data.List.break isSpace s
+        in if word `Data.List.elem` [", ", "),"] then splitOnWhitespaceInQuotes (Data.List.dropWhile isSpace rest)
+          else word : splitOnWhitespaceInQuotes (Data.List.dropWhile isSpace rest)
 
     checkConditionB :: String -> Bool
-    checkConditionB cs = case dropWhile (/= '\'') cs of
+    checkConditionB cs = case Data.List.dropWhile (/= '\'') cs of
       [] -> False
       (_:')':_) -> True
       _ -> False
     
     splitOnWhitespaceInQuotes2 :: String -> [String]
     splitOnWhitespaceInQuotes2 s =
-      filter (not . null) $ case dropWhile isSpace s of
+      Data.List.filter (not . Data.List.null) $ case Data.List.dropWhile isSpace s of
         "" -> []  -- If the string is empty, return an empty list.
         ('\'':cs) ->
-          let (word, rest) = break (== '\'') cs
-          in ('\'':word ++ "'") : splitOnWhitespaceInQuotes2 (dropWhile isSpace (tail rest))
+          let (word, rest) = Data.List.break (== '\'') cs
+          in ('\'':word Data.List.++ "'") : splitOnWhitespaceInQuotes2 (Data.List.dropWhile isSpace (Data.List.tail rest))
         (c:cs) ->
-          let (word, rest) = break (\x -> isSpace x) s
-          in word : splitOnWhitespaceInQuotes2 (dropWhile isSpace rest)
+          let (word, rest) = Data.List.break (\x -> isSpace x) s
+          in word : splitOnWhitespaceInQuotes2 (Data.List.dropWhile isSpace rest)
 
     splitSelectStatement :: [String] -> Either ErrorMessage ParsedStatement
     splitSelectStatement q = do
         (a, b) <- splitColumns [] q
-        (names, conditions) <- distinguishTableNames b
-        parseSelectStatement a names conditions
+        (names, rest) <- distinguishTableNames b
+        case splitByWord "order by" (Data.List.unwords rest) of
+          [""] -> parseSelectStatement a names [] [] Ascending
+          [conditions] -> parseSelectStatement a names (Data.List.words conditions) [] Ascending
+          [conditions, afterConditions] -> do
+            (cols, mode) <- parseColumns $ Data.List.unwords $ Data.List.words afterConditions
+            parseSelectStatement a names (Data.List.words conditions) cols mode
+          where
+            parseColumns :: String -> Either ErrorMessage ([String], SortMode)
+            parseColumns [] = Left "We should not get here 🤡🤡🤡🤡🤡🤡"
+            parseColumns str = do
+              let cols = Data.List.words $ removeCommas str
+              case Data.List.map toLower $ Data.List.last cols of
+                "asc" -> Right (Data.List.init cols, Ascending)
+                "desc" -> Right (Data.List.init cols, Descending)
+                [] -> Right ([], Ascending)
+                _ -> Right (cols, Ascending)
+
+            removeCommas :: String -> String
+            removeCommas = Data.List.filter (`Data.List.notElem` [','])
+
 
     splitUpdateStatement :: [String] -> Either ErrorMessage ParsedStatement
     splitUpdateStatement queryTokens =
       -- Check if the query contains the necessary components
-      if elemIndex "set" (map (map toLower) queryTokens) /= Nothing
+      if Data.List.elemIndex "set" (Data.List.map (Data.List.map toLower) queryTokens) /= Nothing
         then do
           -- Extract and process the relevant parts of the query
-          let lowershit = splitByWord "set" $ unwords queryTokens
-          let tableName = head $ words $ head lowershit
-          let restAfterUpdate = unwords $ words $ lowershit !! 1
-          if null tableName
+          let lowershit = splitByWord "set" $ Data.List.unwords queryTokens
+          let tableName = Data.List.head $ Data.List.words $ Data.List.head lowershit
+          let restAfterUpdate = Data.List.unwords $ Data.List.words $ lowershit Data.List.!! 1
+          if Data.List.null tableName
             then Left "Invalid Table Name." 
             else do
               let whereSplit = splitByWord "where" restAfterUpdate
               case whereSplit of
                 [pairs] -> do
-                  let updatePairs = words pairs
+                  let updatePairs = Data.List.words pairs
                   let (valuesFinal, updatedColumns) = parsePairs updatePairs
-                  let cols = filter (not . null) (map cleanName valuesFinal)
-                  let values = filter (not . null) (map cleanName updatedColumns)
-                  if length values /= length updatedColumns
+                  let cols = Data.List.filter (not . Data.List.null) (Data.List.map cleanName valuesFinal)
+                  let values = Data.List.filter (not . Data.List.null) (Data.List.map cleanName updatedColumns)
+                  if Data.List.length values /= Data.List.length updatedColumns
                     then Left "Invalid Syntax. Value count doesnt match column count" 
                     else do
                       Right (UpdateStatement tableName cols values "")
                 _ -> do
-                  let updatePairs = words (head whereSplit)
-                  let conditions = unwords $ words $ whereSplit !! 1
+                  let updatePairs = Data.List.words (Data.List.head whereSplit)
+                  let conditions = Data.List.unwords $ Data.List.words $ whereSplit Data.List.!! 1
                   let (valuesFinal, updatedColumns) = parsePairs updatePairs
-                  let cols = filter (not . null) (map cleanName valuesFinal)
-                  let values = filter (not . null) (map cleanName updatedColumns)
-                  if length values /= length updatedColumns 
+                  let cols = Data.List.filter (not . Data.List.null) (Data.List.map cleanName valuesFinal)
+                  let values = Data.List.filter (not . Data.List.null) (Data.List.map cleanName updatedColumns)
+                  if Data.List.length values /= Data.List.length updatedColumns 
                     then Left "Invalid Syntax. Value count doesnt match column count" 
                     else do
                       let combinedConditions = conditions
-                      Right (UpdateStatement tableName cols values (init combinedConditions))
+                      Right (UpdateStatement tableName cols values (Data.List.init combinedConditions))
           else do
-            traceShow (map (map toLower) queryTokens) $ return ()
+            traceShow (Data.List.map (Data.List.map toLower) queryTokens) $ return ()
             Left "Invalid UPDATE query syntax."
 
     parsePairs :: [String] -> ([String], [String])
     parsePairs [] = ([], [])  -- Base case for an empty list
     parsePairs (x:xs)
-        | "=" `isInfixOf` x =  -- Check if the string contains "="
-            let (columns, values) = parsePairs (tail xs)
-            in (columns, (head xs): values)  -- Using tail to skip the "="
+        | "=" `Data.List.isInfixOf` x =  -- Check if the string contains "="
+            let (columns, values) = parsePairs (Data.List.tail xs)
+            in (columns, (Data.List.head xs): values)  -- Using tail to skip the "="
         | otherwise =         
             let (columns, values) = parsePairs xs
             in (x : columns, values)
@@ -184,60 +204,60 @@ parseStatement query =
     -- Parse delete statement
     splitDeleteStatement :: [String] -> Either ErrorMessage ParsedStatement
     splitDeleteStatement query = do
-      if null query || map toLower (head query) /= "from"
+      if Data.List.null query || Data.List.map toLower (Data.List.head query) /= "from"
         then Left "Invalid DELETE syntax: Missing 'FROM' keyword."
         else do
-          let restWithoutFrom = tail query
-          if null (tail restWithoutFrom)
+          let restWithoutFrom = Data.List.tail query
+          if Data.List.null (Data.List.tail restWithoutFrom)
             then do
-              Right (DeleteStatement (head restWithoutFrom) "")
+              Right (DeleteStatement (Data.List.head restWithoutFrom) "")
             else do
-              if map toLower (head (tail restWithoutFrom)) /= "where" || length (tail restWithoutFrom) < 2
+              if Data.List.map toLower (Data.List.head (Data.List.tail restWithoutFrom)) /= "where" || Data.List.length (Data.List.tail restWithoutFrom) < 2
                 then Left "Invalid DELETE syntax: Either Table Name Is Wrong Or Missing 'WHERE' keyword Or Conditions After It"
                 else do
-                  let (table, restWithoutTable) = span (\s -> map toLower s /= map toLower "where") restWithoutFrom
-                  let (conditions, _) = span (\s -> map toLower s /= map toLower "where") (tail restWithoutTable)
-                  if null table
+                  let (table, restWithoutTable) = Data.List.span (\s -> Data.List.map toLower s /= Data.List.map toLower "where") restWithoutFrom
+                  let (conditions, _) = Data.List.span (\s -> Data.List.map toLower s /= Data.List.map toLower "where") (Data.List.tail restWithoutTable)
+                  if Data.List.null table
                     then Left "Invalid DELETE syntax."
                     else do
-                      Right (DeleteStatement (unwords table) (unwords conditions))
+                      Right (DeleteStatement (Data.List.unwords table) (Data.List.unwords conditions))
 
     -- splits columns until finds from (if where or select - error)
     splitColumns :: [String] -> [String] -> Either ErrorMessage ([String], [String])
     splitColumns cols [] = Left "Wrong query syntax"
     splitColumns cols w
-      | map toLower (head w) == "where" || map toLower (head w) == "select" = Left "Wrong SELECT/WHERE placement/count."
-      | map toLower (head w) == "from" && null cols = Left "No columns specified"
-      | map toLower (head w) == "from" = Right (cols, tail w)
-      | otherwise = splitColumns (cols ++ splitByComma (head w)) (tail w)
+      | Data.List.map toLower (Data.List.head w) == "where" || Data.List.map toLower (Data.List.head w) == "select" = Left "Wrong SELECT/WHERE placement/count."
+      | Data.List.map toLower (Data.List.head w) == "from" && Data.List.null cols = Left "No columns specified"
+      | Data.List.map toLower (Data.List.head w) == "from" = Right (cols, Data.List.tail w)
+      | otherwise = splitColumns (cols Data.List.++ splitByComma (Data.List.head w)) (Data.List.tail w)
       where
         -- Helper function to split a string by commas
         splitByComma :: String -> [String]
-        splitByComma str = filter (not . null) $ words $ map (\c -> if c == ',' then ' ' else c) str
+        splitByComma str = Data.List.filter (not . Data.List.null) $ Data.List.words $ Data.List.map (\c -> if c == ',' then ' ' else c) str
 
     -- INSERT INTO table (cols) VALUES (vals), (vals), ...
     identifyInsertValues :: [String] -> Either String ParsedStatement
     identifyInsertValues [] = Left "Specify table name and values."
     identifyInsertValues (table:rest) = do
-      let (cols, restWithoutValues) = span (\s -> map toLower s /= map toLower "values") rest
-      let valuesBlock = dropWhile (\s -> map toLower s == map toLower "values") restWithoutValues
-      if null cols || null valuesBlock
+      let (cols, restWithoutValues) = Data.List.span (\s -> Data.List.map toLower s /= Data.List.map toLower "values") rest
+      let valuesBlock = Data.List.dropWhile (\s -> Data.List.map toLower s == Data.List.map toLower "values") restWithoutValues
+      if Data.List.null cols || Data.List.null valuesBlock
         then do
           Left "Invalid INSERT syntax."
       else do
         ()   <- validateSpaces cols      
-        str  <- removeBrackets (concat cols)
-        ()   <- checkFirstChar (head str)
+        str  <- removeBrackets (Data.List.concat cols)
+        ()   <- checkFirstChar (Data.List.head str)
         ()   <- validateCommaSyntax str
-        if all (all (not . null)) (removeSpaces (map removeBracketsFromList (groupStrings (map cleanName valuesBlock)))) && all (not . null) (splitItemsByComma str)
+        if Data.List.all (Data.List.all (not . Data.List.null)) (removeSpaces (Data.List.map removeBracketsFromList (groupStrings (Data.List.map cleanName valuesBlock)))) && Data.List.all (not . Data.List.null) (splitItemsByComma str)
           then do
-            Right (InsertStatement table (splitItemsByComma str) (removeSpaces (map removeBracketsFromList (groupStrings (map cleanName valuesBlock)))))
+            Right (InsertStatement table (splitItemsByComma str) (removeSpaces (Data.List.map removeBracketsFromList (groupStrings (Data.List.map cleanName valuesBlock)))))
         else
             Left "Invalid INSERT syntax: Empty strings in valuesLines or columns."
 
     validateSpaces :: [String] -> Either String ()
     validateSpaces cols = 
-        if words (changeCommasIntoSpaces (concat cols)) == words (changeCommasIntoSpaces (unwords cols)) 
+        if Data.List.words (changeCommasIntoSpaces (Data.List.concat cols)) == Data.List.words (changeCommasIntoSpaces (Data.List.unwords cols)) 
             then Right ()
         else Left "Wrong syntax: comma missing in-between columns."
 
@@ -245,38 +265,38 @@ parseStatement query =
     checkFirstChar c = if c == ',' then Left "No columns specified before first comma" else Right ()
 
     removeSpaces :: [[String]] -> [[String]]
-    removeSpaces = map (filter (/= " "))
+    removeSpaces = Data.List.map (Data.List.filter (/= " "))
 
     removeBrackets :: String -> Either String String
     removeBrackets cols =
-        case (head cols, last cols) of
-            ('(', ')') -> Right (init (tail cols))
+        case (Data.List.head cols, Data.List.last cols) of
+            ('(', ')') -> Right (Data.List.init (Data.List.tail cols))
             _ -> Left "Wrong syntax: missing ( or ) surrounding columns."
 
     removeBracketsFromList :: [String] -> [String]
-    removeBracketsFromList = map (filter (`notElem` ['(', ')', ',', '[', ']', '{', '}']))
+    removeBracketsFromList = Data.List.map (Data.List.filter (`Data.List.notElem` ['(', ')', ',', '[', ']', '{', '}']))
 
     -- Function to check if a string starts with '('
     startsWithBracket :: String -> Bool
-    startsWithBracket str = head str == '('
+    startsWithBracket str = Data.List.head str == '('
 
     -- Function to check if a string ends with ')' or '),'
     endsWithBracket :: String -> Bool
-    endsWithBracket str = last str == ')' || last str == ','
+    endsWithBracket str = Data.List.last str == ')' || Data.List.last str == ','
 
     -- Function to group strings based on the bracket conditions
     groupStrings :: [String] -> [[String]]
-    groupStrings = groupBy (\x y -> (not (startsWithBracket y)) && (not (endsWithBracket x)))
+    groupStrings = Data.List.groupBy (\x y -> (not (startsWithBracket y)) && (not (endsWithBracket x)))
 
     -- Clean the column or table name from potential extra characters
     cleanName :: String -> String
-    cleanName = filter (`notElem` [',', ';', '\''])
+    cleanName = Data.List.filter (`Data.List.notElem` [',', ';', '\''])
 
     -- makes a parsed select depending if there is where clause or not
-    parseSelectStatement :: [String] -> [String] -> [String] -> Either ErrorMessage ParsedStatement
-    parseSelectStatement cols names [_] = Left "Conditions needed after WHERE."
-    parseSelectStatement cols names [] = Right (SelectStatement cols names "")
-    parseSelectStatement cols names conditions = Right (SelectStatement cols names (unwords (tail conditions)))
+    parseSelectStatement :: [String] -> [String] -> [String] -> [String] -> SortMode -> Either ErrorMessage ParsedStatement
+    parseSelectStatement cols names [_] orderColumns sortMode = Left "Conditions needed after WHERE."
+    parseSelectStatement cols names [] orderColumns sortMode = Right (SelectStatement cols names "" orderColumns sortMode)
+    parseSelectStatement cols names conditions orderColumns sortMode = Right (SelectStatement cols names (Data.List.unwords (Data.List.tail conditions)) orderColumns sortMode)
 
     -- SHOW TABLE table_name identification 
     identifyShowTableName :: [String] -> Either ErrorMessage ParsedStatement
@@ -288,104 +308,106 @@ distinguishColumnNames :: [String] -> Either ErrorMessage ([String], [String])
 distinguishColumnNames rest = 
     case findFrom [] rest of
       Left err -> Left err
-      Right (cols, tablesAndConditions) -> case words (changeCommasIntoSpaces (concat cols)) == words (changeCommasIntoSpaces (unwords cols)) of
+      Right (cols, tablesAndConditions) -> case Data.List.words (changeCommasIntoSpaces (Data.List.concat cols)) == Data.List.words (changeCommasIntoSpaces (Data.List.unwords cols)) of
                 False -> Left "Wrong syntax: incorrect commas between columns."
-                True -> case concat cols of
+                True -> case Data.List.concat cols of
                     [] -> Left "Wrong syntax"
                     (c:cs) -> if c == ',' then Left "No columns specified before first comma" else 
                         case validateCommaSyntax cs of
                             Left err -> Left err
-                            Right () -> case validateTableNames (splitItemsByComma (concat cols)) of
+                            Right () -> case validateTableNames (splitItemsByComma (Data.List.concat cols)) of
                                 Left err -> Left err
-                                Right () -> Right (splitItemsByComma (concat cols), tablesAndConditions)
+                                Right () -> Right (splitItemsByComma (Data.List.concat cols), tablesAndConditions)
 
 
 findFrom :: [String] -> [String] -> Either ErrorMessage ([String], [String])
 findFrom cols [] = Left "Wrong syntax: missing 'FROM' statement"
 findFrom cols words =
-    if map toLower (head words) == "from" then Right (cols, (tail words)) else findFrom (cols ++ [head words]) (tail words)
+    if Data.List.map toLower (Data.List.head words) == "from" then Right (cols, (Data.List.tail words)) else findFrom (cols Data.List.++ [Data.List.head words]) (Data.List.tail words)
 
 distinguishTableNames :: [String] -> Either ErrorMessage ([String], [String])
 distinguishTableNames rest = 
     let (tables, conditions) = findWhere [] rest
-    in case words (changeCommasIntoSpaces (concat tables)) == words (changeCommasIntoSpaces (unwords tables)) of
-        False -> Left ((changeCommasIntoSpaces (concat tables)) ++ " != " ++ (changeCommasIntoSpaces (unwords tables)))
-        True -> case concat tables of
+    in case Data.List.words (changeCommasIntoSpaces (Data.List.concat tables)) == Data.List.words (changeCommasIntoSpaces (Data.List.unwords tables)) of
+        False -> Left ((changeCommasIntoSpaces (Data.List.concat tables)) Data.List.++ " != " Data.List.++ (changeCommasIntoSpaces (Data.List.unwords tables)))
+        True -> case Data.List.concat tables of
             [] -> Left "Wrong syntax: no tables found"
             (c:cs) -> if c == ',' then Left "No columns specified before first comma" else 
                 case validateCommaSyntax cs of
                     Left err -> Left err
-                    Right () -> case validateTableNames (splitItemsByComma (concat tables)) of
+                    Right () -> case validateTableNames (splitItemsByComma (Data.List.concat tables)) of
                         Left err -> Left err
-                        Right () -> Right (splitItemsByComma (concat tables), conditions)
+                        Right () -> Right (splitItemsByComma (Data.List.concat tables), conditions)
 
 validateTableNames :: [String] -> Either ErrorMessage ()
 validateTableNames [] = Right ()
 validateTableNames (n:ns)
-  | map toLower n == "where" || map toLower n == "select" || map toLower n == "from" = Left "Wrong syntax(keywords cannot be table names)"
+  | Data.List.map toLower n == "where" || Data.List.map toLower n == "select" || Data.List.map toLower n == "from" = Left "Wrong syntax(keywords cannot be table names)"
   | otherwise = validateTableNames ns
 
 splitItemsByComma :: String -> [String]
-splitItemsByComma str = words $ map (\c -> if c == ',' then ' ' else c) str
+splitItemsByComma str = Data.List.words $ Data.List.map (\c -> if c == ',' then ' ' else c) str
 
 validateCommaSyntax :: String -> Either ErrorMessage ()
 validateCommaSyntax [] = Right ()
 validateCommaSyntax (c:cs)
-    | c == ',' = if null cs 
+    | c == ',' = if Data.List.null cs 
         then 
             Left "Wrong syntax: comma can't be last symbol after table name"
         else
-            case head cs == ',' of
-                False -> validateCommaSyntax (tail cs)
+            case Data.List.head cs == ',' of
+                False -> validateCommaSyntax (Data.List.tail cs)
                 True -> Left "Wrong syntax(no column name between commas)"
     | otherwise = validateCommaSyntax cs
 
 findWhere :: [String] -> [String] -> ([String], [String])
 findWhere tables [] = (tables, [])
 findWhere tables words =
-    if map toLower (head words) == "where" then (tables, words) else findWhere (tables ++ [head words]) (tail words)
+    if Data.List.map toLower (Data.List.head words) == "where" || Data.List.map toLower (Data.List.head words) == "order" then (tables, words) else findWhere (tables Data.List.++ [Data.List.head words]) (Data.List.tail words)
 
 changeCommasIntoSpaces :: String -> String
-changeCommasIntoSpaces =  map (\c -> if c == ',' then ' ' else c)
+changeCommasIntoSpaces =  Data.List.map (\c -> if c == ',' then ' ' else c)
 
 -- Executes a parsed statemet. Produces a DataFrame. Uses
 -- InMemoryTables.databases a source of data.
 -- execute SHOW TABLE table_name;
 executeStatement :: ParsedStatement -> Either ErrorMessage DataFrame
 executeStatement (ShowTable table_name) =
-  case lookup table_name database of
-    Just result -> Right $ DataFrame [Column "Columns" StringType] (map (\(Column name _) -> [StringValue name]) (columns result))
-    Nothing -> Left ("Table " ++ table_name ++ " doesn't exist")
+  case Data.List.lookup table_name database of
+    Just result -> Right $ DataFrame [Column "Columns" StringType] (Data.List.map (\(Column name _) -> [StringValue name]) (columns result))
+    Nothing -> Left ("Table " Data.List.++ table_name Data.List.++ " doesn't exist")
   where
     columns :: DataFrame -> [Column]
     columns (DataFrame cols _) = cols
 
 -- execute SHOW TABLES;
 executeStatement ShowTables =
-  Right $ DataFrame [Column "Tables" StringType] (map (\(name, _) -> [StringValue name]) database)
+  Right $ DataFrame [Column "Tables" StringType] (Data.List.map (\(name, _) -> [StringValue name]) database)
 
 --execute SELECT cols FROM table WHERE ... AND ... AND ...;
-executeStatement (SelectStatement cols tables conditions) =
+executeStatement (SelectStatement cols tables conditions orderCols sortMode) =
   case applyConditions conditions tables dataFrames of
     Left err -> Left err
-    Right (DataFrame c r) ->
-      if validateColumns (map (\(Column name _) -> name) c) c cols
-        then case executeSelect c r cols of
-          Left err -> Left err
-          Right result -> Right result
-      else if checkIfAll cols
-        then Right (DataFrame c r)
-      else
-        Left "(Some of the) Column(s) not found."
+    Right df ->
+      case sortDataFrame df orderCols sortMode of
+        (DataFrame c r) ->
+          if validateColumns (Data.List.map (\(Column name _) -> name) c) c cols
+            then case executeSelect c r cols of
+              Left err -> Left err
+              Right result -> Right result
+          else if checkIfAll cols
+            then Right (DataFrame c r)
+          else
+            Left "(Some of the) Column(s) not found."
   where
     --Cia gaunami DataFrame is tableName
     dataFrames = toDataFrames tables
 
     toDataFrames :: [String] -> [DataFrame]
-    toDataFrames tables = map getDataFrame tables
+    toDataFrames tables = Data.List.map getDataFrame tables
       where
         getDataFrame :: String -> DataFrame
-        getDataFrame name = case lookup name database of
+        getDataFrame name = case Data.List.lookup name database of
           Just df -> df
           Nothing -> DataFrame [] []
     --
@@ -399,19 +421,19 @@ executeStatement (SelectStatement cols tables conditions) =
     validateColumns :: [String] -> [Column] -> [String] -> Bool
     validateColumns columns c [] = True
     validateColumns columns c (n:ns) =
-      (elem n columns || checkIfSumOrMin n c) && validateColumns columns c ns
+      (Data.List.elem n columns || checkIfSumOrMin n c) && validateColumns columns c ns
 
     checkIfSumOrMin :: String -> [Column] -> Bool
     checkIfSumOrMin str columns
-        | ("sum(" `isPrefixOf` (map toLower str) || "min(" `isPrefixOf`map toLower str) && last str == ')' =
-            checkAgainColumn (drop 4 (init str)) columns
+        | ("sum(" `Data.List.isPrefixOf` (Data.List.map toLower str) || "min(" `Data.List.isPrefixOf`Data.List.map toLower str) && Data.List.last str == ')' =
+            checkAgainColumn (Data.List.drop 4 (Data.List.init str)) columns
         | otherwise = False
 
         -- Define a sample function to check the column
     checkAgainColumn :: String -> [Column] -> Bool
     checkAgainColumn columnName columns =
-        case any (\(Column name _) -> name == columnName) columns of
-            True -> checkIfInteger (filter (\(Column name _) -> name == columnName) columns)
+        case Data.List.any (\(Column name _) -> name == columnName) columns of
+            True -> checkIfInteger (Data.List.filter (\(Column name _) -> name == columnName) columns)
             False -> False
 
     checkIfInteger :: [Column] -> Bool
@@ -425,11 +447,11 @@ executeStatement (SelectStatement cols tables conditions) =
       let
         -- Find the index of a column by name in a list of columns
         findColumnIndex :: String -> [Column] -> Maybe Int
-        findColumnIndex columnName columns = elemIndex columnName (map (\(Column colName _) -> colName) columns)
+        findColumnIndex columnName columns = Data.List.elemIndex columnName (Data.List.map (\(Column colName _) -> colName) columns)
 
         -- Extract values from a specified column in a list of rows
         getValuesInColumn :: Int -> [Row] -> [Integer]
-        getValuesInColumn columnIndex rows = [value | (IntegerValue value) <- map (!! columnIndex) rows]
+        getValuesInColumn columnIndex rows = [value | (IntegerValue value) <- Data.List.map (Data.List.!! columnIndex) rows]
 
         -- Calculate the minimum value in a specified column of a DataFrame
         minim :: DataFrame -> String -> Either ErrorMessage Integer
@@ -438,7 +460,7 @@ executeStatement (SelectStatement cols tables conditions) =
                 Just columnIndex ->
                     case getValuesInColumn columnIndex rows of
                         [] -> Left "No values in the specified column."
-                        values -> Right (foldr1 min values)
+                        values -> Right (Data.List.foldr1 min values)
                 Nothing -> Left "Column not found in the DataFrame."
 
         -- Calculate the sum of values in a specified column of a DataFrame
@@ -447,7 +469,7 @@ executeStatement (SelectStatement cols tables conditions) =
             case findColumnIndex columnName columns of
                 Just columnIndex ->
                     case getValuesInColumn columnIndex rows of
-                        values -> Right (sum values)
+                        values -> Right (Data.List.sum values)
                 Nothing -> Left "Column not found in the DataFrame."
 
         filterRows :: [Column] -> [Row] -> [String] -> [Row]
@@ -455,7 +477,7 @@ executeStatement (SelectStatement cols tables conditions) =
         filterRows cols (row:restRows) selectedColumnNames =
           let
             extractValues :: [Column] -> Row -> Row
-            extractValues selectedCols values = [val | (col, val) <- zip cols values, col `elem` selectedCols]
+            extractValues selectedCols values = [val | (col, val) <- Data.List.zip cols values, col `Data.List.elem` selectedCols]
 
             filteredRow = extractValues selectedColumns row
 
@@ -466,38 +488,38 @@ executeStatement (SelectStatement cols tables conditions) =
         splitByBracket :: String -> (String, String)
         splitByBracket s =
           let
-            tuple = splitAt 3 (init s)
+            tuple = Data.List.splitAt 3 (Data.List.init s)
           in
-            (fst tuple, tail (snd tuple))
+            (fst tuple, Data.List.tail (snd tuple))
 
         extractFunctions :: [String] -> ([String], [(String, String)]) -> ([String], [(String, String)])
         extractFunctions [] cols = cols
         extractFunctions (c:cs) (cols, functions) =
-          case take 4 (map toLower c) of
-            "min(" -> extractFunctions cs (cols, functions ++ [splitByBracket c])
-            "sum(" -> extractFunctions cs (cols, functions ++ [splitByBracket c])
-            _ ->  extractFunctions cs (cols ++ [c], functions)
+          case Data.List.take 4 (Data.List.map toLower c) of
+            "min(" -> extractFunctions cs (cols, functions Data.List.++ [splitByBracket c])
+            "sum(" -> extractFunctions cs (cols, functions Data.List.++ [splitByBracket c])
+            _ ->  extractFunctions cs (cols Data.List.++ [c], functions)
 
         -- -- cia baigta
         combineRowsAndFunctions :: [Row] -> [(String, String)] -> [Column] -> [Row] -> [Row]
         combineRowsAndFunctions rez [] _ _ = rez
-        combineRowsAndFunctions r (t:ts) columns rows = combineRowsAndFunctions (map (addValueToRow t columns rows) r) ts columns rows
+        combineRowsAndFunctions r (t:ts) columns rows = combineRowsAndFunctions (Data.List.map (addValueToRow t columns rows) r) ts columns rows
           where
             addValueToRow :: (String, String) -> [Column] -> [Row] -> Row -> Row
             addValueToRow t columns rows row =
-              if map toLower (fst t) == "min"
+              if Data.List.map toLower (fst t) == "min"
                 then
                   case minim (DataFrame columns rows) (snd t) of
                     Left err -> row
-                    Right rez -> row ++ [IntegerValue rez]
+                    Right rez -> row Data.List.++ [IntegerValue rez]
               else
                 case sum_n (DataFrame columns rows) (snd t) of
                   Left err -> row
-                  Right rez -> row ++ [IntegerValue rez]
+                  Right rez -> row Data.List.++ [IntegerValue rez]
 
 
         extractColumns :: [String] -> [Column] -> [Column]
-        extractColumns names cols = filter (\(Column name _) -> name `elem` names) cols
+        extractColumns names cols = Data.List.filter (\(Column name _) -> name `Data.List.elem` names) cols
 
         combineColsAndFunctions :: [Column] -> [(String, String)] -> [Column]
         combineColsAndFunctions rez [] = rez
@@ -505,11 +527,11 @@ executeStatement (SelectStatement cols tables conditions) =
           where
             addValueToCols :: [Column] -> (String, String) -> [Column]
             addValueToCols c tup =
-              if map toLower (fst tup) == "min"
+              if Data.List.map toLower (fst tup) == "min"
                 then
-                  c ++ [Column ("MIN(" ++ (snd tup) ++ ")") IntegerType]
+                  c Data.List.++ [Column ("MIN(" Data.List.++ (snd tup) Data.List.++ ")") IntegerType]
               else
-                  c ++ [Column ("SUM(" ++ (snd tup) ++ ")") IntegerType]
+                  c Data.List.++ [Column ("SUM(" Data.List.++ (snd tup) Data.List.++ ")") IntegerType]
 
         -- reikia atskirt kur yra column name ir kur yra min ir sum
         fun = extractFunctions selectedColumnNames ([], [])
@@ -518,9 +540,45 @@ executeStatement (SelectStatement cols tables conditions) =
         selectedColumns = extractColumns selectedColumnNames columns
         allCols = combineColsAndFunctions selectedColumns (snd fun)
       in
-        if null (snd fun)
+        if Data.List.null (snd fun)
           then Right (DataFrame allCols allRows)
-          else Right (DataFrame allCols [head allRows])
+          else Right (DataFrame allCols [Data.List.head allRows])
+--------------------------------------
+sortDataFrame :: DataFrame -> [String] -> SortMode -> DataFrame
+sortDataFrame (DataFrame columns rows) colNames mode =
+  DataFrame columns $ Data.List.sortBy (compareRows colIndices) rows
+  where
+    colIndices = Data.List.map (getColumnIndex columns) colNames
+
+    compareRows :: [Int] -> Row -> Row -> Ordering
+    compareRows [] _ _ = EQ
+    compareRows (idx:rest) row1 row2 =
+      case compareValues (row1 Data.List.!! idx) (row2 Data.List.!! idx) of
+        EQ -> compareRows rest row1 row2
+        result -> if mode == Ascending then result else flipOrder result
+
+    compareValues :: Value -> Value -> Ordering
+    compareValues (IntegerValue x) (IntegerValue y) = compare x y
+    compareValues (StringValue x) (StringValue y) = compare x y
+    compareValues (BoolValue x) (BoolValue y) = compare x y
+    compareValues NullValue NullValue = EQ
+    compareValues NullValue _ = LT
+    compareValues _ NullValue = GT
+
+    getColumnIndex :: [Column] -> String -> Int
+    getColumnIndex columns' name =
+      case Data.List.lookup name $ Data.List.zip (Data.List.map extractColumnName columns') [0..] of
+        Just idx -> idx
+        Nothing -> error $ "Column " Data.List.++ name Data.List.++ " not found in DataFrame."
+
+    extractColumnName :: Column -> String
+    extractColumnName (Column name _) = name
+
+    flipOrder :: Ordering -> Ordering
+    flipOrder LT = GT
+    flipOrder EQ = EQ
+    flipOrder GT = LT
+----------------------------------------------------------------
 
 -- Filters a DataFrame table by statement conditions
 applyConditions :: String -> [String] -> [DataFrame] -> Either ErrorMessage DataFrame
@@ -528,7 +586,7 @@ applyConditions :: String -> [String] -> [DataFrame] -> Either ErrorMessage Data
 applyConditions conditions [tableName] [table] = do
     case table of
       (DataFrame columns rows) ->
-        if null conditions
+        if Data.List.null conditions
           then return (DataFrame (renameColumns tableName columns) rows)
           else return (DataFrame (renameColumns tableName columns) (filterRows conditions (DataFrame (renameColumns tableName columns) rows) rows))
 
@@ -537,7 +595,7 @@ applyConditions conditions tableNames tables = do
   let joinedTable = joinTables tableNames tables
   case joinedTable of
         (DataFrame columns rows) ->
-          if null conditions
+          if Data.List.null conditions
             then return (DataFrame columns rows)
             else return (DataFrame columns (filterRows conditions joinedTable rows))
 
@@ -546,10 +604,10 @@ applyConditions conditions tableNames tables = do
 ----------------------
 joinTables :: [String] -> [DataFrame] -> DataFrame
 joinTables tableNames tables =
-  foldl (\acc (tableName, df) -> joinTwoTables (head tableNames) acc tableName df) baseTable restTables
+  Data.List.foldl (\acc (tableName, df) -> joinTwoTables (Data.List.head tableNames) acc tableName df) baseTable restTables
   where
-    baseTable = head tables
-    restTables =  zip (tail tableNames) (tail tables)
+    baseTable = Data.List.head tables
+    restTables =  Data.List.zip (Data.List.tail tableNames) (Data.List.tail tables)
 
 joinTwoTables :: TableName -> DataFrame -> TableName -> DataFrame -> DataFrame
 joinTwoTables tableName1 df1 tableName2 df2 =
@@ -561,19 +619,19 @@ joinTwoTables tableName1 df1 tableName2 df2 =
 
 findCommonColumns :: [Column] -> [Column] -> [String]
 findCommonColumns cols1 cols2 =
-  [colName1 | Column colName1 _ <- cols1, any (\(Column colName2 _) -> colName1 == colName2) cols2]
+  [colName1 | Column colName1 _ <- cols1, Data.List.any (\(Column colName2 _) -> colName1 == colName2) cols2]
 
 renameColumns :: TableName -> [Column] -> [Column]
 renameColumns tableName cols =
-  [Column (tableName ++ "." ++ colName) colType | Column colName colType <- cols]
+  [Column (tableName Data.List.++ "." Data.List.++ colName) colType | Column colName colType <- cols]
 
 rowMultiplication :: DataFrame -> DataFrame -> DataFrame
 rowMultiplication (DataFrame cols1 rows1) (DataFrame cols2 rows2) =
-  DataFrame (cols1 ++ cols2) [row1 ++ row2 | row1 <- rows1, row2 <- rows2]
+  DataFrame (cols1 Data.List.++ cols2) [row1 Data.List.++ row2 | row1 <- rows1, row2 <- rows2]
 
 removeDuplicateColumns :: [String] -> DataFrame -> DataFrame
 removeDuplicateColumns commonColumns (DataFrame cols rows) =
-  DataFrame (nubBy (\(Column col1 _) (Column col2 _) -> col1 == col2) cols) rows
+  DataFrame (Data.List.nubBy (\(Column col1 _) (Column col2 _) -> col1 == col2) cols) rows
 
 getColumns :: DataFrame -> [Column]
 getColumns dataFrame = case dataFrame of
@@ -586,9 +644,9 @@ getRows dataFrame = case dataFrame of
 -- Helper function to find a table by name in the database
 findTableByName :: String -> (TableName, DataFrame)
 findTableByName tableName =
-  case lookup tableName database of
+  case Data.List.lookup tableName database of
     Just df -> (tableName, df)
-    Nothing -> error ("Table not found: " ++ tableName)
+    Nothing -> error ("Table not found: " Data.List.++ tableName)
 ----------------------
 
 -- Filters rows based on the given conditions
@@ -601,7 +659,7 @@ checkCondition condition table row = executeCondition $ getFirstThreeWords condi
   where
     getFirstThreeWords :: String -> Either ErrorMessage (String, String, String)
     getFirstThreeWords input =
-      case words input of
+      case Data.List.words input of
         [operand1, operator, operand2] -> Right (operand1, operator, operand2)
         _ -> Left "Incorrect condition syntax"
 
@@ -658,7 +716,7 @@ checkCondition condition table row = executeCondition $ getFirstThreeWords condi
 
         -- Find the column index by columnName
         maybeColumnIndex = toMaybeDataFrame table >>= \(DataFrame columns _) ->
-          elemIndex columnName (map (\(Column name _) -> name) columns)
+          Data.List.elemIndex columnName (Data.List.map (\(Column name _) -> name) columns)
 
         maybeValue index =
           case index of
@@ -681,7 +739,7 @@ checkCondition condition table row = executeCondition $ getFirstThreeWords condi
 
 checkAll :: String -> DataFrame -> Row -> Either ErrorMessage Bool
 checkAll conditions tableFrame row
-    | null conditions = Right True
+    | Data.List.null conditions = Right True
     | otherwise = checkAllConditions (splitByAnd conditions) tableFrame row
 
 checkAllConditions :: [String] -> DataFrame -> Row -> Either ErrorMessage Bool
@@ -698,7 +756,7 @@ splitByAnd input = splitByWord "and" input
 splitByWord :: String -> String -> [String]
 splitByWord _ [] = [""]
 splitByWord word input@(x:xs)
-    | word `isPrefixOf` map toLower input = "" : splitByWord word (drop (length word) input)
-    | otherwise = (x : head rest) : tail rest
+    | word `Data.List.isPrefixOf` Data.List.map toLower input = "" : splitByWord word (Data.List.drop (Data.List.length word) input)
+    | otherwise = (x : Data.List.head rest) : Data.List.tail rest
     where
         rest = splitByWord word xs
