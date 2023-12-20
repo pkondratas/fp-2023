@@ -191,6 +191,13 @@ main = hspec $ do
       result <- runExecuteIO $ Lib3.executeSql "Select NOW(), employees.id from yees;" 
       result `shouldSatisfy` isLeft
 
+    it "returns a empty dataframe when creating table " $ do
+      result <- runExecuteIO $ Lib3.executeSql "Create table newTable (id, int);"
+      result `shouldBe` Right (DataFrame[Column "id" IntegerType][])
+    
+    it "returns a error when column type is wrong " $ do
+      result <- runExecuteIO $ Lib3.executeSql "Create table newTable (id, aaaaaa);"
+      result `shouldSatisfy` isLeft
     it "returns a DataFrame with deleted rows" $ do 
       result <- runExecuteIO $ Lib3.executeSql "Delete from people;"
       result `shouldBe` Right (DataFrame[Column "id" IntegerType, Column "name" StringType][])
@@ -247,4 +254,4 @@ main = hspec $ do
     it "Parses Json into a DataFrame" $ do
       Lib3.jsonParser  ("{ \"columns\": [{ \"name\": \"id\", \"type\": \"integer\" }, { \"name\": \"name\", \"type\": \"string\" }, { \"name\": \"surname\", \"type\": \"string\" }], \"rows\": [[{\"IntegerValue\":1}, {\"StringValue\":\"Vi\"}, {\"StringValue\":\"Po\"}], [{\"IntegerValue\":2}, {\"StringValue\":\"Ed\"}, {\"StringValue\":\"Dl\"}]] }")
       `shouldBe` Just (DataFrame[Column "id" IntegerType, Column "name" StringType, Column "surname" StringType][ [IntegerValue 1, StringValue "Vi", StringValue "Po"],
-                                                                                                                       [IntegerValue 2, StringValue "Ed", StringValue "Dl"]])                                                                                       
+                                                                                                                       [IntegerValue 2, StringValue "Ed", StringValue "Dl"]])

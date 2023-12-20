@@ -22,7 +22,7 @@ import System.Console.Repline
     evalRepl,
   )
 import System.Console.Terminal.Size (Window, size, width)
-import System.Directory (listDirectory, doesFileExist)
+import System.Directory (listDirectory, doesFileExist, removeFile)
 import System.FilePath (dropExtension, pathSeparator, takeExtension)
 
 type Repl a = HaskelineT IO a
@@ -92,6 +92,9 @@ runExecuteIO (Free step) = do
             files <- listDirectory "db"
             let tableNames = foldl (\acc fileName -> if takeExtension fileName == ".json" then dropExtension fileName : acc else acc) [] files
             return $ next tableNames
+        runStep (Lib3.DropTable tname next) = do
+            removeFile ("db" ++ [pathSeparator] ++ tname ++ ".json")
+            return $ next (tname ++ ".json")
           
 
 
