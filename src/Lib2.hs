@@ -37,6 +37,7 @@ data ParsedStatement
   | InsertStatement String [String] [[String]]
   | DeleteStatement String String
   | UpdateStatement String [String] [String] String
+  | DropTableStatement String
   deriving (Show, Eq)
 
 -- Parses user input into an entity representing a parsed
@@ -93,8 +94,14 @@ parseStatement query =
               Left err -> Left err
               Right result -> Right result
           _ -> Left "Missing 'INTO' keyword after 'INSERT'."
+      | map toLower command == "drop" && map toLower (head q) == "table" = identifyDropTable (tail q)          
       | otherwise = Left "Wrong query syntax"
       
+    identifyDropTable :: [String] -> Either ErrorMessage ParsedStatement
+    identifyDropTable [] = Left "Table name isn't specified"
+    identifyDropTable [q] = Right (DropTableStatement q)
+    identifyDropTable (q:_) = Left "Table should contain only one word"
+
                 -- Function to split the query at whitespaces outside quotes
     splitOnWhitespaceInQuotes :: String -> [String]
     splitOnWhitespaceInQuotes s = filter (not . null) $ case dropWhile isSpace s of

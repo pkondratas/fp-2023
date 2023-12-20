@@ -34,7 +34,7 @@ import Control.Monad.Trans.Class (lift)
 import Data.Either (partitionEithers)
 import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
-    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement, UpdateStatement, DeleteStatement),
+    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement, UpdateStatement, DeleteStatement, DropTableStatement),
       parseStatement)
 import Control.Monad.Trans.Except (runExceptT, ExceptT (ExceptT), throwE)
 
@@ -47,6 +47,7 @@ data ExecutionAlgebra next
   | GetTime (UTCTime -> next)
   | SaveFile (String, DataFrame) ((String, DataFrame) -> next)
   | GetTableNames ([TableName] -> next)
+  | DropTable TableName (String -> next)
   -- feel free to add more constructors here
   deriving Functor
 
@@ -63,6 +64,9 @@ saveFile df = liftF $ SaveFile df id
 
 getTableNames :: Execution [TableName]
 getTableNames = liftF $ GetTableNames id
+
+dropTable :: TableName -> Execution String
+dropTable tname = liftF $ DropTable tname id
 
 executeSql :: String -> Execution (Either ErrorMessage DataFrame)
 executeSql sql =
@@ -95,6 +99,19 @@ executeSql sql =
               case result of
                 Left errorMsg -> return $ Left errorMsg
                 Right deletedData -> saveDeletedDataFrame deletedData tableName
+    Right (DropTableStatement table) -> do
+      table_names <- getTableNames
+      dropIfTableExists table_names table
+
+dropIfTableExists :: [TableName] -> String -> Execution (Either ErrorMessage DataFrame)
+dropIfTableExists [] _ = return $ Left "Such table doesn't exist."
+dropIfTableExists (n:ns) tname =
+  if n == tname
+    then do
+      deleted <- dropTable tname
+      return $ Right (DataFrame [Column "Removed table" StringType] [[StringValue deleted]])
+  else
+    dropIfTableExists ns tname
 
 deleteWithoutWhere :: DataFrame -> String -> Execution (Either ErrorMessage DataFrame)
 deleteWithoutWhere originalDataFrame tableName = do
@@ -111,7 +128,7 @@ deleteWithWhere (DataFrame columns rows) conditions =
         case checkAll conditions (DataFrame columns [row]) row of
           Right True  -> False
           Right False -> True
-          Left err    -> error err 
+          Left err    -> error err
       updatedRows = filter keepRow rows
   in case sequence (map (checkAll conditions (DataFrame columns rows)) rows) of
     Right _ -> Right (DataFrame columns updatedRows)
@@ -299,7 +316,7 @@ executeStatement ShowTables = do
 --execute SELECT cols FROM table WHERE ... AND ... AND ...;
 executeStatement (SelectStatement cols tables conditions) = do
   result <- loadTables tables
-  case result of 
+  case result of
     Left err -> return $ Left err
     Right dataFrames -> runExceptT $ do
       (DataFrame c r) <- ExceptT . return $ applyConditions conditions tables dataFrames
@@ -704,7 +721,7 @@ checkCondition condition table row = executeCondition $ getFirstThreeWords condi
         maybeValue index =
           case index of
             Just i -> do
-              case currentRow `atMay` i of 
+              case currentRow `atMay` i of
                 Just val -> Right val
                 Nothing -> Left "Column does not exist"
             Nothing -> Left "Column does not exist"
