@@ -38,6 +38,7 @@ data ParsedStatement
   | DeleteStatement String String
   | UpdateStatement String [String] [String] String
   | DropTableStatement String
+  | CreateStatement String [(String, String)]
   deriving (Show, Eq)
 
 -- Parses user input into an entity representing a parsed
@@ -51,6 +52,9 @@ parseStatement query =
   else if map toLower (takeWhile (not . isSpace) query) == "update" && elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
     then do
       identifyCommand (splitOnWhitespaceInQuotes2 query)
+  else if map toLower (takeWhile (not . isSpace) query) == "create" && elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
+    then do
+      identifyCommand (removeParensAndSemicolons (addWhitespaceBeforeSemicolon query))    
   else if elemIndex ';' query /= Nothing && fromMaybe (-1) (elemIndex ';' query) == length query - 1
     then identifyCommand (words (init query))
   else
@@ -94,9 +98,43 @@ parseStatement query =
               Left err -> Left err
               Right result -> Right result
           _ -> Left "Missing 'INTO' keyword after 'INSERT'."
-      | map toLower command == "drop" && map toLower (head q) == "table" = identifyDropTable (tail q)          
+      | map toLower command == "drop" && map toLower (head q) == "table" = identifyDropTable (tail q)
+      |map toLower command == "create" = case map toLower (head q) of
+          "table" ->
+            case identifyCreateTable (tail q) of
+              Left err -> Left err
+              Right result -> Right result
+          _ -> Left "Missing 'INTO' keyword after 'INSERT'."          
       | otherwise = Left "Wrong query syntax"
+
+    identifyCreateTable :: [String] -> Either String ParsedStatement
+    identifyCreateTable input = case input of
+        (tableName : rest) -> Right $ CreateStatement tableName (parseColumns rest)
+        _ -> Left "Failed to parse CREATE TABLE statement"
+
+    -- Remove leading and trailing parentheses and semicolons from a string
+    removeParensAndSemicolons :: String -> [String]
+    removeParensAndSemicolons = words . filter (`notElem` "(),")
+
+    addWhitespaceBeforeSemicolon :: String -> String
+    addWhitespaceBeforeSemicolon [] = []
+    addWhitespaceBeforeSemicolon (x:xs)
+      | x == ';'  = ' ' : ';' : addWhitespaceBeforeSemicolon xs
+      | otherwise = x : addWhitespaceBeforeSemicolon xs
       
+    -- Parse the column list
+    parseColumns :: [String] -> [(String, String)]
+    parseColumns [] = error "Invalid CREATE TABLE statement: Missing closing parenthesis or semicolon"
+    parseColumns (";" : _) = []  -- End of column list
+    parseColumns (columnName : dataType : rest) = (columnName, removeTrailingComma dataType) : parseColumns rest
+    parseColumns _ = error "Invalid CREATE TABLE statement: Mismatched parenthesis or semicolon"
+
+    -- Remove trailing commas from data type specifications and add a whitespace before removing the closing parenthesis
+    removeTrailingComma :: String -> String
+    removeTrailingComma str
+        | last str == ')' = init str ++ " "
+        | otherwise = str
+
     identifyDropTable :: [String] -> Either ErrorMessage ParsedStatement
     identifyDropTable [] = Left "Table name isn't specified"
     identifyDropTable [q] = Right (DropTableStatement q)

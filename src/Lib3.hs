@@ -34,7 +34,7 @@ import Control.Monad.Trans.Class (lift)
 import Data.Either (partitionEithers)
 import DataFrame (DataFrame (..), Column (..), ColumnType (..), Value (..), Row)
 import Lib2
-    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement, UpdateStatement, DeleteStatement, DropTableStatement),
+    ( ParsedStatement(SelectStatement, ShowTable, ShowTables, InsertStatement, UpdateStatement, DeleteStatement, DropTableStatement, CreateStatement),
       parseStatement)
 import Control.Monad.Trans.Except (runExceptT, ExceptT (ExceptT), throwE)
 
@@ -99,9 +99,39 @@ executeSql sql =
               case result of
                 Left errorMsg -> return $ Left errorMsg
                 Right deletedData -> saveDeletedDataFrame deletedData tableName
+    Right (CreateStatement tableName columns) -> do
+      let createdTable = createTable columns
+      case createdTable of
+        Left errorMsg -> return $ Left errorMsg
+        Right table -> saveCreatedTable table tableName
     Right (DropTableStatement table) -> do
       table_names <- getTableNames
       dropIfTableExists table_names table
+
+saveCreatedTable :: DataFrame -> String -> Execution (Either ErrorMessage DataFrame)
+saveCreatedTable df tableName = do
+  saveFile (tableName, df)
+  return $ Right df
+
+
+inferColumnType :: String -> Either String ColumnType
+inferColumnType "int" = Right IntegerType
+inferColumnType "string" = Right StringType
+inferColumnType "bool" = Right BoolType
+inferColumnType other = Left $ "Error: Unrecognized column type - " ++ other
+
+-- Modified createDataFrame function
+createTable :: [(String, String)] -> Either String DataFrame
+createTable columns =
+  let
+    columnDefs = mapM (\(name, colType) -> fmap (\t -> Column name t) (inferColumnType colType)) columns
+    emptyRows = []  -- You can initialize rows with any default values if needed
+  in
+    case columnDefs of
+      Left err -> Left err
+      Right cols -> Right $ DataFrame cols emptyRows
+
+
 
 dropIfTableExists :: [TableName] -> String -> Execution (Either ErrorMessage DataFrame)
 dropIfTableExists [] _ = return $ Left "Such table doesn't exist."

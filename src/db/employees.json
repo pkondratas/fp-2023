@@ -1,1 +1,62 @@
-{ "columns": [{ "name": "id", "type": "integer" }, { "name": "name", "type": "string" }, { "name": "surname", "type": "string" }], "rows": [[{"IntegerValue":1}, {"StringValue":"Alexandr"}, {"StringValue":"Po"}], [{"IntegerValue":1}, {"StringValue":"Ed"}, {"StringValue":"Dl"}], [{"IntegerValue":5}, {"NullValue":null}, {"StringValue":"Namerino"}], [{"IntegerValue":5}, {"NullValue":null}, {"StringValue":"Namerino"}]] }
+{
+    "columns": [
+        {
+            "name": "id",
+            "type": "integer"
+        },
+        {
+            "name": "name",
+            "type": "string"
+        },
+        {
+            "name": "surname",
+            "type": "string"
+        }
+    ],
+    "rows": [
+        [
+            {
+                "IntegerValue": 1
+            },
+            {
+                "StringValue": "Alexandr"
+            },
+            {
+                "StringValue": "Po"
+            }
+        ],
+        [
+            {
+                "IntegerValue": 1
+            },
+            {
+                "StringValue": "Ed"
+            },
+            {
+                "StringValue": "Dl"
+            }
+        ],
+        [
+            {
+                "IntegerValue": 5
+            },
+            {
+                "NullValue": null
+            },
+            {
+                "StringValue": "Namerino"
+            }
+        ],
+        [
+            {
+                "IntegerValue": 5
+            },
+            {
+                "NullValue": null
+            },
+            {
+                "StringValue": "Namerino"
+            }
+        ]
+    ]
+}
