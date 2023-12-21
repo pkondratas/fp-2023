@@ -12,7 +12,8 @@ module Lib2
     checkAll,
     applyConditions,
     sortDataFrame,
-    ParsedStatement(..)
+    ParsedStatement(..),
+    SortMode(..)
   )
 where
 
@@ -181,12 +182,12 @@ parseStatement query =
           [""] -> parseSelectStatement a names [] [] Ascending
           [conditions] -> parseSelectStatement a names (Data.List.words conditions) [] Ascending
           [conditions, afterConditions] -> do
-            (cols, mode) <- parseColumns $ Data.List.unwords $ Data.List.words afterConditions
+            (cols, mode) <- parseOrderColumns $ Data.List.unwords $ Data.List.words afterConditions
             parseSelectStatement a names (Data.List.words conditions) cols mode
           where
-            parseColumns :: String -> Either ErrorMessage ([String], SortMode)
-            parseColumns [] = Left "We should not get here 🤡🤡🤡🤡🤡🤡"
-            parseColumns str = do
+            parseOrderColumns :: String -> Either ErrorMessage ([String], SortMode)
+            parseOrderColumns [] = Left "We should not get here 🤡🤡🤡🤡🤡🤡"
+            parseOrderColumns str = do
               let cols = Data.List.words $ removeCommas str
               case Data.List.map toLower $ Data.List.last cols of
                 "asc" -> Right (Data.List.init cols, Ascending)
