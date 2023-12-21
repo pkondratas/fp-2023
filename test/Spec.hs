@@ -30,6 +30,8 @@ runExecuteIO (Free step) = do
       return $ next ([tableName | (tableName, _) <- database])
     runStep (Lib3.GetTime next ) =
       return $ next testTime
+    runStep (Lib3.DropTable tname next) =
+      return $ next (tname ++ ".json")
 
 testTime :: UTCTime
 testTime = read "2023-12-24 19:00:00 UTC"
@@ -266,3 +268,9 @@ main = hspec $ do
       result `shouldBe` Right (DataFrame [Column "people.id" IntegerType, Column "people.name" StringType][ [IntegerValue 1, StringValue "greta"],
                                                                                               [IntegerValue 1, StringValue "emilja"],
                                                                                               [IntegerValue 1, StringValue "domas"]])
+    it "Deletes a table." $ do
+      result <- runExecuteIO $ Lib3.executeSql "Drop table people;"
+      result `shouldBe` Right (DataFrame [Column "Removed table" StringType] [[StringValue "people.json"]])
+    it "returns left when table does not exist." $ do
+      result <- runExecuteIO $ Lib3.executeSql "Drop table noTable;"
+      result `shouldSatisfy` isLeft                                                                           
